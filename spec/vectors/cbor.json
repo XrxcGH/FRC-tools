@@ -1,0 +1,161 @@
+{
+  "note": "Deterministic CBOR per RFC 8949 §4.2.1, as constrained by spec/canonical-cbor.md. An implementation must produce exactly `hex` for each `value`, and must decode `hex` back to it. Map cases are given deliberately out of order: canonical encoding sorts keys by their ENCODED bytes, so input order must not matter.",
+  "cases": [
+    {
+      "name": "uint 0",
+      "value": 0,
+      "hex": "00"
+    },
+    {
+      "name": "uint 23 (inline boundary)",
+      "value": 23,
+      "hex": "17"
+    },
+    {
+      "name": "uint 24 (one-byte boundary)",
+      "value": 24,
+      "hex": "1818"
+    },
+    {
+      "name": "uint 255",
+      "value": 255,
+      "hex": "18ff"
+    },
+    {
+      "name": "uint 256",
+      "value": 256,
+      "hex": "190100"
+    },
+    {
+      "name": "uint 65535",
+      "value": 65535,
+      "hex": "19ffff"
+    },
+    {
+      "name": "uint 65536",
+      "value": 65536,
+      "hex": "1a00010000"
+    },
+    {
+      "name": "uint 4294967295",
+      "value": 4294967295,
+      "hex": "1affffffff"
+    },
+    {
+      "name": "uint 4294967296",
+      "value": 4294967296,
+      "hex": "1b0000000100000000"
+    },
+    {
+      "name": "negint -1",
+      "value": -1,
+      "hex": "20"
+    },
+    {
+      "name": "negint -256",
+      "value": -256,
+      "hex": "38ff"
+    },
+    {
+      "name": "false",
+      "value": false,
+      "hex": "f4"
+    },
+    {
+      "name": "true",
+      "value": true,
+      "hex": "f5"
+    },
+    {
+      "name": "null",
+      "value": null,
+      "hex": "f6"
+    },
+    {
+      "name": "empty text",
+      "value": "",
+      "hex": "60"
+    },
+    {
+      "name": "ascii text",
+      "value": "IETF",
+      "hex": "6449455446"
+    },
+    {
+      "name": "non-ascii text",
+      "value": "ü",
+      "hex": "62c3bc"
+    },
+    {
+      "name": "empty bytes",
+      "value": {
+        "$bytes": ""
+      },
+      "hex": "40"
+    },
+    {
+      "name": "bytes 01020304",
+      "value": {
+        "$bytes": "01020304"
+      },
+      "hex": "4401020304"
+    },
+    {
+      "name": "empty array",
+      "value": [],
+      "hex": "80"
+    },
+    {
+      "name": "array [1,2,3]",
+      "value": [
+        1,
+        2,
+        3
+      ],
+      "hex": "83010203"
+    },
+    {
+      "name": "empty map",
+      "value": {
+        "$map": []
+      },
+      "hex": "a0"
+    },
+    {
+      "name": "map with integer keys, out of order on input",
+      "value": {
+        "$map": [
+          [
+            10,
+            "ten"
+          ],
+          [
+            1,
+            "one"
+          ],
+          [
+            3,
+            "three"
+          ]
+        ]
+      },
+      "hex": "a301636f6e65036574687265650a6374656e"
+    },
+    {
+      "name": "map mixing integer and text keys",
+      "value": {
+        "$map": [
+          [
+            "a",
+            1
+          ],
+          [
+            1,
+            2
+          ]
+        ]
+      },
+      "hex": "a20102616101"
+    }
+  ]
+}

@@ -1,0 +1,21 @@
+{
+  "note": "Sync messages use the same canonical codec as records. Field 1 digests, 2 id lists, 3 want, 4 records, 5 more. Digest xor is the bytewise XOR of every record-id in range, which is order-independent; count disambiguates the degenerate cases XOR alone misses.",
+  "cases": [
+    {
+      "name": "root digest over three records",
+      "hex": "a101818360035820a66d6c49d93aff1d5019e624dc433ba4c3fc07d6d8f3193bfd0b919302fdf282"
+    },
+    {
+      "name": "empty digest (no records)",
+      "hex": "a1018183600058200000000000000000000000000000000000000000000000000000000000000000"
+    },
+    {
+      "name": "want two truncated ids",
+      "hex": "a1038248011cbb6f4b4e7979482d58876dc232fdc5"
+    },
+    {
+      "name": "bare turn-return",
+      "hex": "a105f4"
+    }
+  ]
+}
