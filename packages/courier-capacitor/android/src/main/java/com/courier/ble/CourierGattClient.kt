@@ -134,6 +134,17 @@ internal class CourierGattClient(
          */
         val writeInFlight = AtomicBoolean(false)
 
+        /**
+         * Set when a write was refused, cleared when the wake-up is delivered.
+         *
+         * Without it `readyToWrite` fires after every completed write, whether
+         * or not anything was ever refused — so a 40-packet frame crosses the
+         * bridge 40 extra times for nothing. The JS side absorbs the noise, but
+         * the contract says the event means "you may retry now", and firing it
+         * when nobody is waiting makes it mean nothing.
+         */
+        val readyOwed = AtomicBoolean(false)
+
         /** Taken exactly once, by whichever of success/failure/timeout wins. */
         val pending = AtomicReference<((Int?, String?) -> Unit)?>(null)
 
@@ -452,7 +463,11 @@ internal class CourierGattClient(
         val gatt = peer.gatt ?: return SendResult.GONE
         val rx = peer.rx ?: return SendResult.GONE
 
-        if (!peer.writeInFlight.compareAndSet(false, true)) return SendResult.REFUSED
+        if (!peer.writeInFlight.compareAndSet(false, true)) {
+            // A wake-up is now owed: onCharacteristicWrite will deliver it.
+            peer.readyOwed.set(true)
+            return SendResult.REFUSED
+        }
 
         val taken = try {
             writeCompat(gatt, rx, packet)
@@ -466,6 +481,9 @@ internal class CourierGattClient(
             // onCharacteristicWrite is coming for it. The caller has to arrange
             // the wake-up.
             peer.writeInFlight.set(false)
+            // No callback is coming, so the plugin schedules the wake-up itself;
+            // it must not also be delivered by a later completion.
+            peer.readyOwed.set(false)
             return SendResult.REFUSED_NO_CALLBACK
         }
         return SendResult.ACCEPTED
@@ -693,9 +711,13 @@ internal class CourierGattClient(
             if (status != BluetoothGatt.GATT_SUCCESS) {
                 Log.w(TAG, "write to ${peer.peerId} failed, status $status")
             }
-            // Ready either way: the slot is free, and letting the writer retry
-            // beats letting it hang.
-            events.onReadyToWrite(peer.peerId)
+            // Only when a wake-up is actually owed. The slot being free is not
+            // news to a writer that was never refused, and `readyToWrite` means
+            // "you may retry now" — firing it at nobody drains its meaning and
+            // spends the bridge once per packet.
+            if (peer.readyOwed.compareAndSet(true, false)) {
+                events.onReadyToWrite(peer.peerId)
+            }
         }
 
         /** API 33+. The value arrives with the callback instead of on the object. */
