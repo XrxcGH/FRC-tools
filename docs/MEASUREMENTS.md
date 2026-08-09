@@ -27,8 +27,8 @@ Overhead is 186-191 bytes and steps only where CBOR length headers widen (186 be
 | Distinct scouts | 8 |
 | Total envelope bytes | 167.5 kB |
 | Mean envelope | 268 B |
-| Seal + verify + store, wall clock | 1526 ms |
-| Per record | 2.38 ms |
+| Seal + verify + store, wall clock | 1567 ms |
+| Per record | 2.45 ms |
 
 Transfer time for the whole day's data, at the throughput figures the design uses:
 
@@ -64,8 +64,8 @@ Two separate effects are visible here, and they should not be confused.
 
 | Operation | Per record | Records/second |
 |---|---:|---:|
-| Seal (encode + Ed25519 sign) | 0.42 ms | 2383 |
-| Open (verify + decode + validate) | 1.69 ms | 591 |
+| Seal (encode + Ed25519 sign) | 0.47 ms | 2114 |
+| Open (verify + decode + validate) | 1.70 ms | 587 |
 
 On this machine a peer can verify a full event day (640 records) in 1.1 s. A 2016-class Chromebook or a low-end Android tablet should be assumed several times slower — see the open items below, because that factor has not been measured on real hardware.
 
