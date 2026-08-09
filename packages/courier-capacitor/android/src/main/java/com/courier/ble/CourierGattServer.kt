@@ -173,6 +173,16 @@ internal class CourierGattServer(
          * this flag up to the enclosing class.
          */
         val notifyInFlight = AtomicBoolean(false)
+
+        /**
+         * Set when a notification was refused, cleared when the wake-up lands.
+         *
+         * `readyToWrite` means "you may retry now". Firing it after every
+         * completed notification, refused or not, spends the bridge once per
+         * packet — 40 extra crossings on a single frame — and makes the event
+         * mean nothing. Swift only signals peers it actually refused; match it.
+         */
+        val readyOwed = AtomicBoolean(false)
     }
 
     private class PendingStart(val label: String, val done: (String?) -> Unit)
@@ -451,7 +461,11 @@ internal class CourierGattServer(
         val srv = server ?: return SendResult.GONE
         val characteristic = tx ?: return SendResult.GONE
 
-        if (!peer.notifyInFlight.compareAndSet(false, true)) return SendResult.REFUSED
+        if (!peer.notifyInFlight.compareAndSet(false, true)) {
+            // A wake-up is now owed; onNotificationSent will deliver it.
+            peer.readyOwed.set(true)
+            return SendResult.REFUSED
+        }
 
         val taken = try {
             notifyCompat(srv, peer.device, characteristic, packet)
@@ -466,6 +480,9 @@ internal class CourierGattServer(
             // connection. No onNotificationSent will follow for an attempt that
             // was never queued, so the caller has to arrange the wake-up.
             peer.notifyInFlight.set(false)
+            // No callback is coming, so the plugin schedules the wake-up itself.
+            // It must not also arrive from a later completion.
+            peer.readyOwed.set(false)
             return SendResult.REFUSED_NO_CALLBACK
         }
         return SendResult.ACCEPTED
@@ -630,13 +647,30 @@ internal class CourierGattServer(
                 return
             }
 
+            // Only from a central that has actually subscribed, i.e. one JS was
+            // told about via peerFound. `peerFor` would MINT a handle here, so a
+            // stranger writing to RX would produce packets tagged with a peerId
+            // that no transport is listening for — silently discarded, and
+            // indistinguishable from radio loss when someone goes looking.
+            // Swift refuses this write; match it.
+            val known = peers.knownIdFor(device)
+            val peer = known?.let { connected[it] }
+            if (peer == null || !peer.subscribed) {
+                if (responseNeeded) {
+                    srv?.trySendResponse(
+                        device, requestId, BluetoothGatt.GATT_REQUEST_NOT_SUPPORTED, offset, null,
+                    )
+                }
+                return
+            }
+
             // Answer at the ATT layer first: the peer's flow control is waiting
             // on it, and the bridge hop to JS is comparatively slow.
             if (responseNeeded) {
                 srv?.trySendResponse(device, requestId, BluetoothGatt.GATT_SUCCESS, 0, value)
             }
             if (value == null || value.isEmpty()) return
-            events.onPacket(peerFor(device).peerId, value)
+            events.onPacket(peer.peerId, value)
         }
 
         override fun onDescriptorReadRequest(
@@ -718,11 +752,13 @@ internal class CourierGattServer(
             if (status != BluetoothGatt.GATT_SUCCESS) {
                 Log.w(TAG, "notification to $peerId failed, status $status")
             }
-            // Fire readyToWrite either way. A failed notification still frees
-            // the slot, and the packet was already reported as not-delivered or
-            // the link is about to drop; letting the writer retry is strictly
-            // better than letting it hang.
-            events.onReadyToWrite(peerId)
+            // Only when a wake-up is owed — but owed either way, success or
+            // failure: a failed notification still frees the slot, and letting
+            // a waiting writer retry beats letting it hang. What changes is that
+            // a writer which was never refused is no longer told anything.
+            if (peer.readyOwed.compareAndSet(true, false)) {
+                events.onReadyToWrite(peerId)
+            }
         }
     }
 
