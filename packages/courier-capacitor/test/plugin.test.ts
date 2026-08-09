@@ -4,14 +4,14 @@ import {
   toBase64,
   fromBase64,
   meshBlockers,
-  openLink,
+  CourierBleHub,
   webFallbackPlugin,
   CapacitorTransportError,
   type CourierBlePlugin,
   type CourierBleCapabilities,
 } from '../src/index.ts';
 import { syncBothEnds } from '@courier/transport';
-import { MIN_MTU, PREFERRED_MTU } from '@courier/ble';
+import { MIN_MTU, PREFERRED_MTU, split } from '@courier/ble';
 import {
   RecordStore,
   storesConverged,
@@ -201,7 +201,10 @@ test('two stores converge across the plugin bridge', async () => {
   fill(a, 1, 40);
   fill(b, 30, 70);
 
-  const [la, lb] = await Promise.all([openLink(pa, 'peer'), openLink(pb, 'peer')]);
+  const [la, lb] = await Promise.all([
+    new CourierBleHub(pa).open('peer'),
+    new CourierBleHub(pb).open('peer'),
+  ]);
   await syncBothEnds({ store: a, link: la }, { store: b, link: lb }, resolver);
 
   assert.ok(storesConverged(a, b), `expected convergence, got ${a.size} vs ${b.size}`);
@@ -217,18 +220,113 @@ test('an iOS-style refusal re-queues the packet instead of dropping it', async (
   const b = new RecordStore();
   fill(a, 1, 12);
 
-  const [la, lb] = await Promise.all([openLink(pa, 'peer'), openLink(pb, 'peer')]);
+  const [la, lb] = await Promise.all([
+    new CourierBleHub(pa).open('peer'),
+    new CourierBleHub(pb).open('peer'),
+  ]);
   await syncBothEnds({ store: a, link: la }, { store: b, link: lb }, resolver);
 
   assert.ok(storesConverged(a, b), `expected convergence, got ${a.size} vs ${b.size}`);
   assert.equal(b.size, 12);
 });
 
+test('a packet arriving before the link is open is delivered, not lost', async () => {
+  // The window the hub closes: listeners are registered when the hub first does
+  // anything, and demux by peerId from then on — so a packet landing between
+  // `connect()` being issued and the link existing is buffered rather than
+  // dropped into a gap where nothing was listening.
+  //
+  // Note what this does NOT claim: nothing can catch a packet that arrives
+  // before the hub has registered listeners at all. A real device is scanning
+  // or advertising first, which is what `startScan()` models here.
+  const [pa, pb] = fakePluginPair();
+  const hubA = new CourierBleHub(pa);
+  const hubB = new CourierBleHub(pb);
+
+  await hubB.startScan(); // listeners up, no link yet
+
+  const la = await hubA.open('peer');
+  await la.send(utf8('early bird'));
+  await new Promise((r) => setTimeout(r, 20)); // it lands while B has no transport
+
+  const lb = await hubB.open('peer');
+  const got = await lb.receive();
+  assert.equal(new TextDecoder().decode(got!), 'early bird');
+});
+
+test('buffered packets go to the right peer, never to whoever opens first', async () => {
+  // Capacitor's retainUntilConsumed flushes to the FIRST listener, which on a
+  // device holding two inbound links hands peer A the packets meant for peer B.
+  // Demultiplexing by peerId in the hub is what makes that impossible.
+  const events = new Map<string, Array<(e: never) => void>>();
+  const plugin = {
+    async capabilities() {
+      return caps();
+    },
+    async requestPermissions() {
+      return { granted: true };
+    },
+    async startAdvertising() {},
+    async stopAdvertising() {},
+    async startScan() {},
+    async stopScan() {},
+    async connect() {
+      return { peerId: 'x', mtu: PREFERRED_MTU };
+    },
+    async disconnect() {},
+    async write() {
+      return { accepted: true };
+    },
+    async addListener(event: string, handler: (e: never) => void) {
+      const l = events.get(event) ?? [];
+      l.push(handler);
+      events.set(event, l);
+      return { remove: async () => {} };
+    },
+  } as unknown as CourierBlePlugin;
+
+  const hub = new CourierBleHub(plugin);
+  // Force listener registration, then deliver for a peer nobody has opened.
+  await hub.startScan();
+
+  // Emit a properly FRAMED packet: GattLink hands bytes to the reassembler, so
+  // raw payload bytes would never complete a frame and the test would hang
+  // rather than fail.
+  const emit = (peerId: string, text: string): void => {
+    for (const packet of split(utf8(text), PREFERRED_MTU, 1)) {
+      for (const h of events.get('packetReceived') ?? []) {
+        (h as unknown as (e: { peerId: string; packet: string }) => void)({
+          peerId,
+          packet: toBase64(packet),
+        });
+      }
+    }
+  };
+  emit('peer-B', 'for B');
+
+  // Peer A opens FIRST. It must not receive B's packet.
+  const linkA = await hub.open('peer-A');
+  let aGotSomething = false;
+  void linkA.receive().then(() => {
+    aGotSomething = true;
+  });
+  await new Promise((r) => setTimeout(r, 20));
+  assert.equal(aGotSomething, false, "A must not drain B's buffered packet");
+
+  // Then B opens and gets exactly its own.
+  const linkB = await hub.open('peer-B');
+  const got = await linkB.receive();
+  assert.equal(new TextDecoder().decode(got!), 'for B');
+});
+
 test('packets keep their order even when native pushes back', async () => {
   // Reassembly rejects out-of-order packets rather than splicing them, so a
   // queued retry must go before anything written after it.
   const [pa, pb] = fakePluginPair({ queueDepth: 1, mtu: MIN_MTU });
-  const [la, lb] = await Promise.all([openLink(pa, 'peer'), openLink(pb, 'peer')]);
+  const [la, lb] = await Promise.all([
+    new CourierBleHub(pa).open('peer'),
+    new CourierBleHub(pb).open('peer'),
+  ]);
 
   const payload = new Uint8Array(600);
   for (let i = 0; i < payload.length; i++) payload[i] = (i * 31) & 0xff;

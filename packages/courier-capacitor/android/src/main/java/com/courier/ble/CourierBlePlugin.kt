@@ -566,7 +566,11 @@ class CourierBlePlugin : Plugin() {
             if (error != null) {
                 call.reject(error)
             } else {
-                call.resolve(JSObject().put("peerId", peerId).put("mtu", mtu))
+                call.resolve(
+                    JSObject()
+                        .put("peerId", peerId)
+                        .put("mtu", mtu ?: CourierProfile.MIN_MTU),
+                )
             }
         }
     }

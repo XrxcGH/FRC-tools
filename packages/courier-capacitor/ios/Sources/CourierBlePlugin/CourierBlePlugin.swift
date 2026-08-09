@@ -105,10 +105,12 @@ enum CourierGatt {
 ///    devices belonging to minors' teams. So it stays inside this process, used
 ///    only as a dictionary key, and never leaves.
 /// 3. **Stable for as long as a peer is known.** The tables in the two
-///    controllers map a `CBPeer.identifier` to one of these for the lifetime of
-///    the app process, so re-discovering the same peripheral during a session
-///    yields the same `peerId`. Across launches it is a fresh value, which is
-///    the privacy-preserving default and costs nothing: no TypeScript in this
+///    controllers map a `CBPeer.identifier` to one of these, so re-discovering
+///    or reconnecting to the same peripheral during a session yields the same
+///    `peerId`. A central that unsubscribes is forgotten, and gets a new handle
+///    if it comes back — from the peripheral's side that genuinely is a new
+///    session. Across app launches every handle is fresh, which is the
+///    privacy-preserving default and costs nothing: no TypeScript in this
 ///    repository persists a `peerId`.
 enum CourierPeerHandle {
     static func make() -> String {
@@ -194,6 +196,7 @@ public class CourierBlePlugin: CAPPlugin, CAPBridgedPlugin {
     override public func load() {
         central = CourierCentral(queue: queue, sink: self)
         peripheral = CourierPeripheral(queue: queue, sink: self)
+        log.info("Courier BLE plugin loaded")
         // Note what is NOT done here: neither CBCentralManager nor
         // CBPeripheralManager is constructed. Constructing either one is what
         // triggers the system Bluetooth permission prompt, and a prompt at app
@@ -290,7 +293,11 @@ public class CourierBlePlugin: CAPPlugin, CAPBridgedPlugin {
 
     // MARK: requestPermissions
 
-    @objc func requestPermissions(_ call: CAPPluginCall) {
+    /// `override` because `CAPPlugin` declares `requestPermissions` as part of
+    /// Capacitor's standard permission pattern and its default implementation
+    /// calls `unimplemented()`. (If a Capacitor version without that base method
+    /// is ever targeted, drop the keyword — the compiler will say so.)
+    @objc override public func requestPermissions(_ call: CAPPluginCall) {
         queue.async { [weak self] in
             guard let self else { return call.reject("the Courier BLE plugin was unloaded") }
             // iOS has no "request Bluetooth permission" API. The prompt is

@@ -197,7 +197,13 @@ internal class CourierGattClient(
         }
         scanning = true
         Log.i(TAG, "scan started")
-        main.postDelayed({ pendingScanStart?.invoke(null); pendingScanStart = null }, SCAN_START_GRACE_MS)
+        main.postDelayed(
+            {
+                if (pendingScanStart === callback) pendingScanStart = null
+                callback(null)
+            },
+            SCAN_START_GRACE_MS,
+        )
     }
 
     fun stopScan() {
@@ -356,10 +362,15 @@ internal class CourierGattClient(
         peer.timeout = null
         val done = peer.take()
         if (error != null) {
-            connections.remove(peer.peerId, peer)
+            forget(peer)
             closeGatt(peer)
         }
         done?.invoke(mtu, error)
+    }
+
+    /** Drop the registration only if it is still this peer, not a replacement. */
+    private fun forget(peer: ClientPeer) {
+        if (connections[peer.peerId] === peer) connections.remove(peer.peerId)
     }
 
     private fun closeGatt(peer: ClientPeer) {
@@ -451,6 +462,7 @@ internal class CourierGattClient(
      * WRITE_TYPE_DEFAULT here is the whole fix; nothing above depends on the
      * choice.
      */
+    @Suppress("DEPRECATION")
     private fun writeCompat(
         gatt: BluetoothGatt,
         rx: BluetoothGattCharacteristic,
@@ -467,7 +479,8 @@ internal class CourierGattClient(
             }
             return status == BluetoothStatusCodes.SUCCESS
         }
-        @Suppress("DEPRECATION")
+        // The pre-33 API carries the value and the write type on the shared
+        // characteristic object, so setting them and writing must be atomic.
         return synchronized(rx) {
             rx.writeType = BluetoothGattCharacteristic.WRITE_TYPE_NO_RESPONSE
             rx.value = packet
@@ -479,8 +492,16 @@ internal class CourierGattClient(
     /* Callbacks                                                              */
     /* ---------------------------------------------------------------------- */
 
-    private fun peerOf(gatt: BluetoothGatt): ClientPeer? =
-        connections.values.firstOrNull { it.gatt === gatt }
+    /**
+     * Resolved through the peer registry rather than by comparing BluetoothGatt
+     * instances: a callback can in principle arrive before connectGatt has
+     * returned and its result been stored, and a lookup that depends on that
+     * assignment would silently drop the event.
+     */
+    private fun peerOf(gatt: BluetoothGatt): ClientPeer? {
+        val peerId = peers.knownIdFor(gatt.device) ?: return null
+        return connections[peerId]
+    }
 
     private val gattCallback = object : BluetoothGattCallback() {
 
@@ -499,6 +520,9 @@ internal class CourierGattClient(
             if (newState == BluetoothProfile.STATE_CONNECTED &&
                 status == BluetoothGatt.GATT_SUCCESS
             ) {
+                // Defensive: openGatt stores this too, but if the callback beat
+                // the assignment, closeGatt would otherwise leak the interface.
+                peer.gatt = gatt
                 Log.i(TAG, "connected to ${peer.peerId}, negotiating MTU")
                 // MTU first, then discovery.
                 //
@@ -526,7 +550,7 @@ internal class CourierGattClient(
             if (newState == BluetoothProfile.STATE_DISCONNECTED) {
                 if (peer.ready) {
                     Log.i(TAG, "disconnected from ${peer.peerId} (status $status)")
-                    connections.remove(peer.peerId, peer)
+                    forget(peer)
                     closeGatt(peer)
                     events.onDisconnected(peer.peerId, describeGattStatus(status))
                     return
@@ -689,6 +713,7 @@ internal class CourierGattClient(
         }
     }
 
+    @Suppress("DEPRECATION")
     private fun writeDescriptorCompat(
         gatt: BluetoothGatt,
         descriptor: BluetoothGattDescriptor,
@@ -697,9 +722,7 @@ internal class CourierGattClient(
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             return gatt.writeDescriptor(descriptor, value) == BluetoothStatusCodes.SUCCESS
         }
-        @Suppress("DEPRECATION")
         descriptor.value = value
-        @Suppress("DEPRECATION")
         return gatt.writeDescriptor(descriptor)
     }
 }
