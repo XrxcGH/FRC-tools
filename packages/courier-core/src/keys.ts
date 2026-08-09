@@ -44,16 +44,9 @@ export interface DeviceKeyPair {
   readonly backing: KeyBacking;
 }
 
-export interface RegisteredKey {
-  readonly kid: Uint8Array;
-  readonly publicKey: Uint8Array;
-  readonly backing: KeyBacking;
-  /** Operator-chosen, non-name label. See D-20: no student names, ever. */
-  readonly label: string;
-  readonly addedAt: number;
-  /** Set when a device is lost or a student leaves; records stay verifiable. */
-  revokedAt?: number;
-}
+// The registered-key type and the trust policy that goes with it live in
+// @courier/pairing, which owns who a device accepts records from. Core owns the
+// cryptography and stays out of the policy.
 
 function randomSecretKey(): Uint8Array {
   const u = ed25519.utils as unknown as {

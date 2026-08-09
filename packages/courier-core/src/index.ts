@@ -60,7 +60,6 @@ export {
   verify,
   MESH_KEY_BYTES,
   type DeviceKeyPair,
-  type RegisteredKey,
   type KeyBacking,
 } from './keys.ts';
 
