@@ -42,11 +42,18 @@ CourierRecord = {
 
 version         = 1
 event-key       = tstr .size (4..16)
-match-packed    = uint                  ; see spec/canonical-cbor.md "Match packing"
+; Bounded at 32 bits by the shift widths in the packing scheme. Stated here so
+; the CDDL and the decoder agree: an unbounded `uint` would admit values the
+; implementation cannot represent.
+match-packed    = uint .le 4294967295   ; see spec/canonical-cbor.md "Match packing"
 team            = uint .le 99999
 scout-pseudonym = bstr .size 8
 schema-id       = tstr .size (1..64)
-sealed-at       = uint
+; Milliseconds since the Unix epoch, bounded at 2^53-1 — the largest integer a
+; JSON/JavaScript consumer can hold exactly. That is the year 285428, so the
+; bound costs nothing, and without it the CDDL declares a range no conformant
+; decoder in this ecosystem can accept.
+sealed-at       = uint .le 9007199254740991
 revision        = uint .le 65535
 body-hash       = bstr .size 32
 body-size       = uint .le 65536
