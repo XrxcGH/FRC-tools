@@ -27,6 +27,19 @@ export {
 } from './pack.ts';
 
 export {
+  signPack,
+  openSignedPack,
+  checkReleaseKind,
+  requiredSignatures,
+  canonicalPackJson,
+  SEASON_PACK_SCHEMA_ID,
+  type ReleaseKind,
+  type SignedPack,
+  type PackSignature,
+  type PackKeyResolver,
+} from './signing.ts';
+
+export {
   PackIndex,
   validateBreakdown,
   reconcileTotal,
