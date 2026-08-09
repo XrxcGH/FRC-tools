@@ -12,7 +12,7 @@
     "node": ">=22.6"
   },
   "scripts": {
-    "test": "node --test \"packages/*/test/*.test.ts\"",
+    "test": "node --test --test-timeout 60000 \"packages/*/test/*.test.ts\"",
     "measure": "node packages/courier-core/bench/measure.ts"
   }
 }
