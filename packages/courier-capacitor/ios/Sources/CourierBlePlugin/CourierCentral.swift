@@ -406,11 +406,39 @@ extension CourierCentral: CBCentralManagerDelegate {
             peers[peerId] = Peer(peripheral: peripheral)
         }
 
-        // Prefer the name in this advertisement over `peripheral.name`, which is
-        // the cached GAP name and can be stale or absent.
+        // The Android peripheral puts the Courier label in SERVICE DATA under
+        // the service UUID, and deliberately sets setIncludeDeviceName(false) on
+        // both the advertisement and the scan response — because the Android
+        // adapter name is very often a person's name. So service data has to be
+        // read first, or every Android device shows up here blank or, worse,
+        // labelled with its owner's name via the GAP fallback.
+        //
+        // This contract is one-directional and cannot be made symmetric:
+        // CBPeripheralManager.startAdvertising accepts only the local-name and
+        // service-UUID keys, so iOS cannot advertise service data at all. The
+        // Android scanner's local-name fallback is the right answer in that
+        // direction.
+        //
+        // Note the 13-byte ceiling on the Android side: a label longer than that
+        // arrives truncated ("stands-tablet-3" becomes "stands-tablet"). That is
+        // the wire reality, not something to repair here.
+        let serviceLabel: String? = {
+            guard
+                let data = advertisementData[CBAdvertisementDataServiceDataKey]
+                    as? [CBUUID: Data],
+                let bytes = data[CourierGatt.serviceUUID],
+                let text = String(data: bytes, encoding: .utf8)
+            else { return nil }
+            let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+            return trimmed.isEmpty ? nil : trimmed
+        }()
+
+        // `peripheral.name` is the cached GAP name — stale, often absent, and on
+        // a phone frequently personal. It is the last resort, and an empty
+        // string is preferred over inventing a placeholder.
         let label =
-            (advertisementData[CBAdvertisementDataLocalNameKey] as? String)
-            ?? peripheral.name
+            serviceLabel
+            ?? (advertisementData[CBAdvertisementDataLocalNameKey] as? String)
             ?? ""
 
         // 127 is Core Bluetooth's "RSSI unavailable"; a non-negative value is
