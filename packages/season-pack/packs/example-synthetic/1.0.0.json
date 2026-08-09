@@ -1,0 +1,94 @@
+{
+  "_WARNING": [
+    "THIS IS A SYNTHETIC FIXTURE. It is not a real FRC game.",
+    "",
+    "The 2027 game (BIOCORE) is embargoed until kickoff on 2027-01-09, and no real scoring",
+    "model can exist before then — that embargo is the whole reason Season Pack has to be a",
+    "72-hour sprint every January rather than something prepared in advance.",
+    "",
+    "This file exists to exercise the format, the validator, and the scoring engine. Every",
+    "field below is invented. Do not cite it, do not ship it, and do not let it be mistaken",
+    "for a real pack: real packs are named for their season and are signed."
+  ],
+  "formatVersion": 1,
+  "packId": "example-synthetic",
+  "season": 2027,
+  "version": "1.0.0",
+  "derivedFromTeamUpdate": 0,
+  "notes": "Synthetic fixture for tests. Not a real game.",
+  "fields": [
+    {
+      "path": "auto.fuel.high",
+      "type": "integer",
+      "unit": "count",
+      "pointsEach": 4,
+      "additive": true,
+      "attribution": "alliance",
+      "concept": "scoring.gamepiece.primary",
+      "sharedResource": "fuel",
+      "maxPlausiblePerMatch": 40
+    },
+    {
+      "path": "teleop.fuel.high",
+      "type": "integer",
+      "unit": "count",
+      "pointsEach": 2,
+      "additive": true,
+      "attribution": "alliance",
+      "concept": "scoring.gamepiece.primary",
+      "sharedResource": "fuel",
+      "maxPlausiblePerMatch": 120
+    },
+    {
+      "path": "teleop.fuel.low",
+      "type": "integer",
+      "unit": "count",
+      "pointsEach": 1,
+      "additive": true,
+      "attribution": "alliance",
+      "concept": "scoring.gamepiece.secondary",
+      "sharedResource": "fuel",
+      "maxPlausiblePerMatch": 200
+    },
+    {
+      "path": "endgame.robot1.climb",
+      "type": "enum",
+      "unit": "category",
+      "values": ["None", "Park", "Low", "High"],
+      "additive": false,
+      "attribution": "robot_slot",
+      "concept": "endgame.climb.level",
+      "trust": "low"
+    },
+    {
+      "path": "auto.robot1.leave",
+      "type": "boolean",
+      "unit": "boolean",
+      "pointsEach": 3,
+      "additive": false,
+      "attribution": "robot_slot",
+      "concept": "auto.leave",
+      "trust": "low"
+    },
+    {
+      "path": "foul.points",
+      "type": "integer",
+      "unit": "points",
+      "additive": false,
+      "attribution": "alliance",
+      "concept": "penalty.points",
+      "maxPlausiblePerMatch": 100
+    }
+  ],
+  "rankingPoints": [
+    {
+      "key": "fuel_rp",
+      "threshold": 45,
+      "description": "Synthetic: alliance scores at least 45 fuel across auto and teleop."
+    },
+    {
+      "key": "win_rp",
+      "description": "Synthetic: awarded for a win."
+    }
+  ]
+}

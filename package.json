@@ -1,0 +1,18 @@
+{
+  "name": "frc-tools",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Courier, Season Pack, and Ledger — infrastructure beneath the FRC scouting-app rebuild",
+  "license": "Apache-2.0",
+  "workspaces": [
+    "packages/*"
+  ],
+  "engines": {
+    "node": ">=22.6"
+  },
+  "scripts": {
+    "test": "node --test \"packages/*/test/*.test.ts\"",
+    "measure": "node packages/courier-core/bench/measure.ts"
+  }
+}

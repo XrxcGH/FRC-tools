@@ -1,0 +1,253 @@
+/**
+ * Season Pack — the season's official scoring model as data.
+ *
+ * Every January the FRC data model breaks. The game is embargoed until kickoff,
+ * FMS score details are finalised during Week 0/1, and Team Updates then mutate
+ * scoring mid-season. Today eight separate tools each re-derive that model by
+ * hand: The Blue Alliance maintains per-season Python files, Statbotics gives up
+ * on interpretability and uses generic component columns, Cheesy Arena ships
+ * current-game scoring months late every year without exception, and validation
+ * tooling cannot exist at all.
+ *
+ * A pack describes what the official scoring fields MEAN — units, whether they
+ * are additive, whether they attribute to an alliance or a robot slot, what a
+ * count is worth in points, and where the ranking-point thresholds sit. That
+ * semantic layer is the part no API exposes, because it lives in the Game
+ * Manual.
+ *
+ * ── Scope boundary, stated once ─────────────────────────────────────────────
+ * A pack describes OFFICIAL scoring only — a thing with exactly one correct
+ * answer. It says nothing about anyone's scouting schema. Courier bodies stay
+ * opaque; nothing here decodes one. Conflating the two would rebuild the
+ * semantic-interchange standard that has already failed in this community.
+ *
+ * ── Deviation from the draft ────────────────────────────────────────────────
+ * The design sketched packs as YAML. These are JSON: it needs no dependency, it
+ * is what every consumer can already parse, and the canonical-CBOR signing path
+ * needs a deterministic serialisation anyway.
+ */
+
+export const PACK_FORMAT_VERSION = 1;
+
+/** Reserved Courier schema id, so a pack can ride the transport it needs anyway. */
+export const PACK_SCHEMA_ID = 'courier.seasonpack.v1';
+
+export type Unit = 'count' | 'points' | 'boolean' | 'seconds' | 'category';
+
+/**
+ * Who a field is attributed to.
+ *
+ * `alliance` is the normal case, because FMS publishes alliance-level scoring
+ * and nothing else. `robot_slot` fields exist (leave, climb, park) but are keyed
+ * to driver stations and are documented as sometimes outright wrong — hence
+ * `trust`, below. Any consumer treating the official record as an oracle for
+ * per-robot data is building on sand.
+ */
+export type Attribution = 'alliance' | 'robot_slot';
+
+export type Trust = 'high' | 'low';
+
+export interface PackField {
+  /** Dotted path into the FMS score breakdown, e.g. "teleop.fuel.high". */
+  readonly path: string;
+  readonly type: 'integer' | 'boolean' | 'enum';
+  readonly unit: Unit;
+  /** Points per unit, where a count converts to points. The thing no API exposes. */
+  readonly pointsEach?: number;
+  /** Eligible for least-squares decomposition (OPR and friends). */
+  readonly additive: boolean;
+  readonly attribution: Attribution;
+  /** Cross-year join key, so a query can span seasons without knowing field names. */
+  readonly concept?: string;
+  readonly values?: readonly string[];
+  readonly trust?: Trust;
+  /** Contended resource shared by the alliance, e.g. a common supply of game pieces. */
+  readonly sharedResource?: string;
+  readonly maxPlausiblePerMatch?: number;
+}
+
+export interface RankingPoint {
+  readonly key: string;
+  readonly threshold?: number;
+  readonly description: string;
+  /** Set when a Team Update moved this mid-season — the reason version != season. */
+  readonly changedIn?: { tu: number; effectiveEventWeek: number };
+}
+
+export interface SeasonPack {
+  readonly formatVersion: number;
+  readonly packId: string;
+  readonly season: number;
+  readonly version: string;
+  /** Team Update number this pack reflects; 0 for the kickoff drop. */
+  readonly derivedFromTeamUpdate: number;
+  readonly fields: readonly PackField[];
+  readonly rankingPoints: readonly RankingPoint[];
+  readonly notes?: string;
+}
+
+export class PackError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'PackError';
+  }
+}
+
+/* -------------------------------------------------------------------------- */
+/* Versioning                                                                  */
+/* -------------------------------------------------------------------------- */
+
+export interface SemVer {
+  major: number;
+  minor: number;
+  patch: number;
+}
+
+const SEMVER_RE = /^(\d+)\.(\d+)\.(\d+)$/;
+
+export function parseVersion(v: string): SemVer {
+  const m = SEMVER_RE.exec(v);
+  if (!m) throw new PackError(`"${v}" is not a MAJOR.MINOR.PATCH version`);
+  return { major: Number(m[1]), minor: Number(m[2]), patch: Number(m[3]) };
+}
+
+export function compareVersions(a: string, b: string): number {
+  const x = parseVersion(a);
+  const y = parseVersion(b);
+  return x.major - y.major || x.minor - y.minor || x.patch - y.patch;
+}
+
+export type ChangeKind = 'major' | 'minor' | 'patch' | 'none';
+
+/**
+ * Classify the change between two packs by the SemVer rule the spec fixes:
+ *
+ *   MAJOR — a field removed, renamed, or its semantics changed
+ *   MINOR — a field added
+ *   PATCH — a threshold or documentation correction that does not change shape
+ *
+ * This exists so the version bump is derived from the diff rather than chosen by
+ * whoever is awake at 2 a.m. during the kickoff sprint.
+ */
+export function classifyChange(from: SeasonPack, to: SeasonPack): ChangeKind {
+  const fromFields = new Map(from.fields.map((f) => [f.path, f]));
+  const toFields = new Map(to.fields.map((f) => [f.path, f]));
+
+  for (const path of fromFields.keys()) {
+    if (!toFields.has(path)) return 'major'; // removed or renamed
+  }
+  for (const [path, f] of fromFields) {
+    const t = toFields.get(path)!;
+    if (
+      f.type !== t.type ||
+      f.unit !== t.unit ||
+      f.additive !== t.additive ||
+      f.attribution !== t.attribution ||
+      f.pointsEach !== t.pointsEach
+    ) {
+      return 'major'; // semantics changed
+    }
+  }
+  for (const path of toFields.keys()) {
+    if (!fromFields.has(path)) return 'minor'; // added
+  }
+
+  const rpFrom = JSON.stringify(from.rankingPoints);
+  const rpTo = JSON.stringify(to.rankingPoints);
+  if (rpFrom !== rpTo) return 'patch';
+  if (from.notes !== to.notes) return 'patch';
+  return 'none';
+}
+
+/** The version `to` must carry, given `from`. Enforced in CI so drift cannot ship. */
+export function requiredVersion(from: SeasonPack, to: SeasonPack): string {
+  const v = parseVersion(from.version);
+  switch (classifyChange(from, to)) {
+    case 'major':
+      return `${v.major + 1}.0.0`;
+    case 'minor':
+      return `${v.major}.${v.minor + 1}.0`;
+    case 'patch':
+      return `${v.major}.${v.minor}.${v.patch + 1}`;
+    case 'none':
+      return from.version;
+  }
+}
+
+/* -------------------------------------------------------------------------- */
+/* Validation                                                                  */
+/* -------------------------------------------------------------------------- */
+
+const UNITS: readonly Unit[] = ['count', 'points', 'boolean', 'seconds', 'category'];
+
+export function validatePack(p: SeasonPack): void {
+  if (p.formatVersion !== PACK_FORMAT_VERSION) {
+    throw new PackError(`unsupported pack format version ${p.formatVersion}`);
+  }
+  if (!p.packId) throw new PackError('pack has no packId');
+  if (!Number.isInteger(p.season) || p.season < 1992 || p.season > 2100) {
+    throw new PackError(`implausible season ${p.season}`);
+  }
+  parseVersion(p.version);
+  if (!Number.isInteger(p.derivedFromTeamUpdate) || p.derivedFromTeamUpdate < 0) {
+    throw new PackError('derivedFromTeamUpdate must be a non-negative integer');
+  }
+  if (p.fields.length === 0) throw new PackError('pack declares no fields');
+
+  const paths = new Set<string>();
+  for (const f of p.fields) {
+    if (!f.path) throw new PackError('field with no path');
+    if (paths.has(f.path)) throw new PackError(`duplicate field path "${f.path}"`);
+    paths.add(f.path);
+
+    if (!UNITS.includes(f.unit)) throw new PackError(`${f.path}: unknown unit "${f.unit}"`);
+    if (f.attribution !== 'alliance' && f.attribution !== 'robot_slot') {
+      throw new PackError(`${f.path}: attribution must be "alliance" or "robot_slot"`);
+    }
+    if (f.type === 'enum' && (!f.values || f.values.length === 0)) {
+      throw new PackError(`${f.path}: enum fields must list their values`);
+    }
+    if (f.type !== 'enum' && f.values) {
+      throw new PackError(`${f.path}: only enum fields may list values`);
+    }
+
+    // The rules that keep downstream maths honest.
+    if (f.additive && f.unit === 'category') {
+      throw new PackError(`${f.path}: a category cannot be additive — it has no sum`);
+    }
+    if (f.additive && f.type === 'enum') {
+      throw new PackError(`${f.path}: an enum cannot be additive`);
+    }
+    if (f.unit === 'count' && f.pointsEach === undefined && f.additive) {
+      throw new PackError(
+        `${f.path}: an additive count needs pointsEach, or no consumer can convert it to points`,
+      );
+    }
+    if (f.pointsEach !== undefined && !Number.isFinite(f.pointsEach)) {
+      throw new PackError(`${f.path}: pointsEach must be a finite number`);
+    }
+    if (f.attribution === 'robot_slot' && f.trust !== 'low') {
+      throw new PackError(
+        `${f.path}: robot_slot fields are keyed to driver stations and are documented as ` +
+          `sometimes wrong, so they must be declared trust:"low" — this is deliberate friction`,
+      );
+    }
+  }
+
+  const rpKeys = new Set<string>();
+  for (const rp of p.rankingPoints) {
+    if (!rp.key) throw new PackError('ranking point with no key');
+    if (rpKeys.has(rp.key)) throw new PackError(`duplicate ranking point "${rp.key}"`);
+    rpKeys.add(rp.key);
+    if (rp.changedIn && !Number.isInteger(rp.changedIn.tu)) {
+      throw new PackError(`${rp.key}: changedIn.tu must be an integer`);
+    }
+  }
+}
+
+export function loadPack(raw: unknown): SeasonPack {
+  if (typeof raw !== 'object' || raw === null) throw new PackError('pack is not an object');
+  const p = raw as SeasonPack;
+  validatePack(p);
+  return p;
+}

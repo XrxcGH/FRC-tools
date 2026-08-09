@@ -1,0 +1,21 @@
+{
+  "name": "@courier/core",
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Courier wire format and anti-entropy protocol — the layer beneath the FRC scouting-app rebuild",
+  "license": "Apache-2.0",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "files": [
+    "src",
+    "README.md"
+  ],
+  "dependencies": {
+    "@noble/curves": "^1.9.0",
+    "@noble/hashes": "^1.8.0"
+  },
+  "scripts": {
+    "test": "node --test --experimental-strip-types \"test/**/*.test.ts\""
+  }
+}

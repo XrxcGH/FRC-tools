@@ -1,0 +1,16 @@
+{
+  "name": "@courier/season-pack",
+  "version": "0.1.0",
+  "type": "module",
+  "description": "The season's scoring model as versioned, machine-readable data",
+  "license": "Apache-2.0",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "dependencies": {
+    "@courier/core": "0.1.0"
+  },
+  "scripts": {
+    "test": "node --test \"test/*.test.ts\""
+  }
+}

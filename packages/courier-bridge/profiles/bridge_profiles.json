@@ -1,0 +1,73 @@
+{
+  "version": 1,
+  "_comment": [
+    "Bridge profiles describe WHERE four routing fields sit inside another app's QR payload.",
+    "They never describe what any other field means, and the Bridge never parses one.",
+    "",
+    "IMPORTANT: `verified` records whether the field positions have been confirmed against",
+    "real output from the named app. A profile with verified:false is scaffolding. A wrong",
+    "index silently routes every record to the wrong team, which is far worse than not",
+    "ingesting at all — the failure is invisible until someone builds a picklist on it.",
+    "Confirm against a real export before an event, then flip the flag in a PR."
+  ],
+  "profiles": [
+    {
+      "id": "courier.generic.tsv.v1",
+      "name": "Generic tab-separated",
+      "format": "delimited",
+      "delimiter": "\t",
+      "minFields": 4,
+      "fields": { "scout": 0, "match": 1, "team": 2 },
+      "matchFormat": "number",
+      "schemaId": "courier.generic.tsv.v1",
+      "verified": true,
+      "notes": "Fully specified by this project, so there is nothing to confirm. Field order is scout, match number, team, then any number of app-defined columns that Courier carries through untouched."
+    },
+    {
+      "id": "courier.generic.json.v1",
+      "name": "Generic JSON object",
+      "format": "json",
+      "fields": { "scout": "scout", "match": "match", "team": "team", "eventKey": "event" },
+      "matchFormat": "number",
+      "schemaId": "courier.generic.json.v1",
+      "verified": true,
+      "notes": "Fully specified by this project. Any additional keys are carried through untouched. Nested routing fields may be addressed with a dotted path, e.g. \"meta.team\"."
+    },
+    {
+      "id": "courier.generic.matchkey.tsv.v1",
+      "name": "Generic tab-separated, full match keys",
+      "format": "delimited",
+      "delimiter": "\t",
+      "minFields": 4,
+      "fields": { "scout": 0, "match": 1, "team": 2 },
+      "matchFormat": "key",
+      "schemaId": "courier.generic.matchkey.tsv.v1",
+      "verified": true,
+      "notes": "As the generic TSV profile, but the match column carries a full TBA-style key (2027mose_sf1m2) so elimination matches can be ingested."
+    },
+    {
+      "id": "qrscout.tsv.UNVERIFIED",
+      "name": "QRScout (tab-separated) — UNVERIFIED SCAFFOLDING",
+      "format": "delimited",
+      "delimiter": "\t",
+      "minFields": 6,
+      "fields": { "scout": 0, "match": 2, "team": 3 },
+      "matchFormat": "number",
+      "schemaId": "qrscout.unverified",
+      "verified": false,
+      "notes": "PLACEHOLDER. Field indices have NOT been confirmed against real QRScout output and are very likely wrong — QRScout's column order is team-configurable, so there may be no single correct answer. Confirm against an actual export from the specific team's configuration before use."
+    },
+    {
+      "id": "scoutingpass.tsv.UNVERIFIED",
+      "name": "ScoutingPASS (tab-separated) — UNVERIFIED SCAFFOLDING",
+      "format": "delimited",
+      "delimiter": "\t",
+      "minFields": 6,
+      "fields": { "scout": 1, "match": 2, "team": 4 },
+      "matchFormat": "number",
+      "schemaId": "scoutingpass.unverified",
+      "verified": false,
+      "notes": "PLACEHOLDER. Field indices have NOT been confirmed against real ScoutingPASS output. ScoutingPASS is configured per team via a JSON config, so column order varies by deployment. Confirm against an actual export before use."
+    }
+  ]
+}
