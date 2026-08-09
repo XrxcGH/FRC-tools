@@ -34,6 +34,19 @@ export {
 } from './http.ts';
 
 export {
+  TbaClient,
+  TbaError,
+  normaliseTeams,
+  normaliseMatches,
+  teamNumberFromKey,
+  lastOfficialMatch,
+  type TbaTeam,
+  type TbaMatch,
+  type TbaAlliance,
+  type EventSnapshot,
+} from './tba.ts';
+
+export {
   buildVenuePack,
   openVenuePack,
   describeStaleness,
