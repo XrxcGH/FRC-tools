@@ -1,0 +1,17 @@
+{
+  "name": "@courier/pairing",
+  "version": "0.1.0",
+  "type": "module",
+  "description": "The two-QR pairing ceremony and the device key registry",
+  "license": "Apache-2.0",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "dependencies": {
+    "@courier/core": "0.1.0",
+    "@noble/curves": "^1.9.0"
+  },
+  "scripts": {
+    "test": "node --test \"test/*.test.ts\""
+  }
+}
