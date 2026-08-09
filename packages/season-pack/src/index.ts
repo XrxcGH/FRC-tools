@@ -31,6 +31,7 @@ export {
   validateBreakdown,
   reconcileTotal,
   readPath,
+  leafPaths,
   type Breakdown,
   type Issue,
   type IssueSeverity,

@@ -3,9 +3,10 @@
  *
  *   Eight scouts capture a full qualification day. Their existing scouting app
  *   knows nothing about Courier — it just emits QR codes, as it always has. The
- *   Bridge ingests those scans, seals them, and the data reaches the picklist
- *   laptop with no venue WiFi and no device ever pairing with the laptop
- *   directly.
+ *   Bridge ingests those scans, seals them, and the data spreads across the
+ *   stands with no venue network, reaching the picklist laptop when a single
+ *   phone finally walks to the pit. Seven of the eight phones never meet the
+ *   laptop at all.
  *
  *   node demo/event-day.ts
  *
@@ -92,10 +93,11 @@ function robotsInMatch(m: number): number[] {
  * columns of whatever that team decided to record this season. Courier reads
  * the first three and never looks at the rest.
  *
- * Eight scouts cover six robots, so scouts 6 and 7 double up on robots 0 and 1
- * — the deliberate ~10% double-scouting that scout-reliability estimation needs
- * in order to be identifiable at all. Two scouts watching the same robot mostly
- * agree, which is exactly the case where naive deduplication destroys data.
+ * Eight scouts cover six robots, so scouts 6 and 7 double up on robots 0 and 1.
+ * That is a 25% double-scouting rate — heavier than the ~10% the design budgets
+ * for, chosen here so the effect is visible in one run rather than realistic.
+ * Two scouts watching the same robot mostly agree, which is exactly the case
+ * where naive deduplication destroys data.
  */
 function scansFor(scout: number, rand: () => number): string[] {
   const out: string[] = [];
@@ -197,7 +199,11 @@ for (let pass = 1; pass <= 3; pass++) {
     wireBytes += res.bytes;
   }
   const sizes = Array.from({ length: SCOUTS }, (_, i) => stores.get(name(i))!.size);
-  const converged = sizes.every((n) => n === sizes[0]);
+  // Equal sizes are not equal sets. Check the sets.
+  const first = stores.get(name(0))!;
+  const converged = Array.from({ length: SCOUTS }, (_, i) =>
+    storesConverged(first, stores.get(name(i))!),
+  ).every(Boolean);
   console.log(
     `  pass ${pass}: store sizes ${sizes.join(', ')}  ${converged ? ok('converged') : dim('spreading…')}`,
   );
@@ -307,11 +313,20 @@ console.log(`\n  ${bold('Sample record')} ${dim(toHex(sample.recordId).slice(0, 
 console.log(`    event   ${sample.record.eventKey}`);
 console.log(`    match   ${matchLabel(sample.record.match)}`);
 console.log(`    team    ${sample.record.team}`);
-console.log(`    scout   ${toHex(sample.record.scout)} ${dim('(per-event pseudonym, not a name)')}`);
+console.log(`    scout   ${toHex(sample.record.scout)} ${dim('(per-event pseudonym)')}`);
 console.log(`    schema  ${sample.record.schema}`);
 console.log(`    body    ${dim(JSON.stringify(new TextDecoder().decode(sample.record.body)))}`);
 console.log(
   dim('    ↑ the original QR payload, byte for byte. Courier never parsed it.'),
+);
+console.log(
+  warn(
+    '\n  Read those two lines together. The scout FIELD is a pseudonym and is unlinkable across\n' +
+      '  events — but the body is the payload verbatim, and this app writes the scout name into\n' +
+      '  it, so the raw identifier ships inside every record. On the Bridge path the pseudonym is\n' +
+      '  not a privacy control; the cleartext is forty bytes away in the same signed record.\n' +
+      '  Every profile declares scoutIdInBody so the UI can say so instead of implying otherwise.',
+  ),
 );
 
 /* ── an outsider tries to inject ──────────────────────────────────────────── */
@@ -330,7 +345,10 @@ for (const e of rivalScans.envelopes) rivalStore.admit(e, () => rival.publicKey)
 const before = laptop.size;
 const attack = reconcile(laptop, rivalStore, resolver);
 console.log(`  rival offered ${rivalScans.sealed} records signed by a key outside the mesh`);
-console.log(`  laptop rejected ${bold(String(attack.rejected))} of them`);
+// `attack.rejected` sums both sessions. It equals the laptop's rejections only
+// because the rival side happens to resolve every mesh key here, so the real
+// evidence is the size check below, not this counter.
+console.log(`  ${bold(String(attack.rejected))} records rejected across the exchange`);
 console.log(
   `  laptop size ${before} → ${laptop.size} ${laptop.size === before ? ok('✓ unchanged') : warn('✗ poisoned')}`,
 );

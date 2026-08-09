@@ -54,6 +54,15 @@ export interface PackField {
   readonly unit: Unit;
   /** Points per unit, where a count converts to points. The thing no API exposes. */
   readonly pointsEach?: number;
+  /**
+   * Points per enum value.
+   *
+   * Every real FRC game scores the endgame as an enum level — hang, traversal,
+   * stage, cage — so a format with only a scalar `pointsEach` cannot express the
+   * points model of any actual season, and a "generic scoring engine" built on
+   * it would return a wrong total for essentially every match.
+   */
+  readonly pointsByValue?: Readonly<Record<string, number>>;
   /** Eligible for least-squares decomposition (OPR and friends). */
   readonly additive: boolean;
   readonly attribution: Attribution;
@@ -64,6 +73,8 @@ export interface PackField {
   /** Contended resource shared by the alliance, e.g. a common supply of game pieces. */
   readonly sharedResource?: string;
   readonly maxPlausiblePerMatch?: number;
+  /** True for fields that legitimately go negative, e.g. adjustment points. */
+  readonly allowNegative?: boolean;
 }
 
 export interface RankingPoint {
@@ -83,6 +94,13 @@ export interface SeasonPack {
   readonly derivedFromTeamUpdate: number;
   readonly fields: readonly PackField[];
   readonly rankingPoints: readonly RankingPoint[];
+  /**
+   * Breakdown paths that exist but are deliberately not modelled — the
+   * aggregates FMS always emits (`totalPoints`, `rp`, `foulCount`). Without an
+   * allowlist, a staleness check that warns on unknown paths cries wolf on
+   * every real match and is therefore ignored, which is worse than no check.
+   */
+  readonly ignoredPaths?: readonly string[];
   readonly notes?: string;
 }
 
@@ -129,33 +147,105 @@ export type ChangeKind = 'major' | 'minor' | 'patch' | 'none';
  * This exists so the version bump is derived from the diff rather than chosen by
  * whoever is awake at 2 a.m. during the kickoff sprint.
  */
+/**
+ * Properties whose change alters what a consumer computes or accepts.
+ * Anything here moving is MAJOR.
+ */
+const SEMANTIC_KEYS = [
+  'type',
+  'unit',
+  'additive',
+  'attribution',
+  'pointsEach',
+  'concept',
+  'trust',
+  'allowNegative',
+] as const;
+
+/** Properties that tune behaviour without changing meaning. PATCH. */
+const TUNING_KEYS = ['maxPlausiblePerMatch', 'sharedResource'] as const;
+
+function stable(v: unknown): string {
+  return JSON.stringify(v ?? null);
+}
+
 export function classifyChange(from: SeasonPack, to: SeasonPack): ChangeKind {
+  if (from.packId !== to.packId) {
+    throw new PackError(
+      `cannot compare packs with different ids ("${from.packId}" vs "${to.packId}")`,
+    );
+  }
+  if (from.season !== to.season) {
+    throw new PackError(`cannot compare packs from different seasons (${from.season} vs ${to.season})`);
+  }
+
   const fromFields = new Map(from.fields.map((f) => [f.path, f]));
   const toFields = new Map(to.fields.map((f) => [f.path, f]));
+
+  let sawMinor = false;
+  let sawPatch = false;
 
   for (const path of fromFields.keys()) {
     if (!toFields.has(path)) return 'major'; // removed or renamed
   }
+
   for (const [path, f] of fromFields) {
     const t = toFields.get(path)!;
-    if (
-      f.type !== t.type ||
-      f.unit !== t.unit ||
-      f.additive !== t.additive ||
-      f.attribution !== t.attribution ||
-      f.pointsEach !== t.pointsEach
-    ) {
-      return 'major'; // semantics changed
+
+    for (const k of SEMANTIC_KEYS) {
+      if (stable(f[k]) !== stable(t[k])) return 'major';
+    }
+
+    // Enum values: a pure addition is MINOR (old consumers still validate every
+    // value they knew). A removal or rename is MAJOR — old consumers would now
+    // flag real match values as errors.
+    const fv = f.values ?? [];
+    const tv = t.values ?? [];
+    if (fv.length || tv.length) {
+      const tvSet = new Set(tv);
+      for (const v of fv) if (!tvSet.has(v)) return 'major';
+      if (tv.length > fv.length) sawMinor = true;
+    }
+
+    // Per-value points: any change to an existing value's worth is MAJOR;
+    // pricing a previously unpriced value is MINOR.
+    const fp = f.pointsByValue ?? {};
+    const tp = t.pointsByValue ?? {};
+    for (const [k, v] of Object.entries(fp)) {
+      if (!(k in tp) || tp[k] !== v) return 'major';
+    }
+    if (Object.keys(tp).length > Object.keys(fp).length) sawMinor = true;
+
+    for (const k of TUNING_KEYS) {
+      if (stable(f[k]) !== stable(t[k])) sawPatch = true;
     }
   }
+
   for (const path of toFields.keys()) {
-    if (!fromFields.has(path)) return 'minor'; // added
+    if (!fromFields.has(path)) sawMinor = true; // added
   }
 
-  const rpFrom = JSON.stringify(from.rankingPoints);
-  const rpTo = JSON.stringify(to.rankingPoints);
-  if (rpFrom !== rpTo) return 'patch';
-  if (from.notes !== to.notes) return 'patch';
+  // Ranking points, compared key-wise. Adding or removing one changes the shape
+  // consumers iterate over, so it is MINOR; moving a threshold is PATCH. A plain
+  // JSON compare would call a reordering a change and an added RP a patch.
+  const fromRp = new Map(from.rankingPoints.map((r) => [r.key, r]));
+  const toRp = new Map(to.rankingPoints.map((r) => [r.key, r]));
+  for (const k of fromRp.keys()) if (!toRp.has(k)) sawMinor = true;
+  for (const k of toRp.keys()) if (!fromRp.has(k)) sawMinor = true;
+  for (const [k, r] of fromRp) {
+    const t = toRp.get(k);
+    if (!t) continue;
+    if (stable(r.threshold) !== stable(t.threshold)) sawPatch = true;
+    if (r.description !== t.description) sawPatch = true;
+    if (stable(r.changedIn) !== stable(t.changedIn)) sawPatch = true;
+  }
+
+  if (stable(from.ignoredPaths) !== stable(to.ignoredPaths)) sawPatch = true;
+  if (from.derivedFromTeamUpdate !== to.derivedFromTeamUpdate) sawPatch = true;
+  if (from.notes !== to.notes) sawPatch = true;
+
+  if (sawMinor) return 'minor';
+  if (sawPatch) return 'patch';
   return 'none';
 }
 
@@ -218,10 +308,35 @@ export function validatePack(p: SeasonPack): void {
     if (f.additive && f.type === 'enum') {
       throw new PackError(`${f.path}: an enum cannot be additive`);
     }
-    if (f.unit === 'count' && f.pointsEach === undefined && f.additive) {
-      throw new PackError(
-        `${f.path}: an additive count needs pointsEach, or no consumer can convert it to points`,
-      );
+    // Every field must declare how it converts to points, or declare that it
+    // does not score. Without this rule a scored boolean or an unpriced count
+    // silently contributes zero, and `scoreBreakdown` quietly under-reports
+    // while claiming to give "the total points implied by a breakdown".
+    if (f.type === 'enum') {
+      if (f.pointsByValue) {
+        for (const k of Object.keys(f.pointsByValue)) {
+          if (!f.values!.includes(k)) {
+            throw new PackError(`${f.path}: pointsByValue has "${k}", which is not one of its values`);
+          }
+          if (!Number.isFinite(f.pointsByValue[k])) {
+            throw new PackError(`${f.path}: pointsByValue["${k}"] must be a finite number`);
+          }
+        }
+      }
+      if (f.pointsEach !== undefined) {
+        throw new PackError(`${f.path}: enum fields score via pointsByValue, not pointsEach`);
+      }
+    } else if (f.unit !== 'points' && f.unit !== 'category') {
+      if (f.pointsEach === undefined) {
+        throw new PackError(
+          `${f.path}: needs pointsEach so consumers can convert it to points. Declare 0 ` +
+            `explicitly if the field genuinely scores nothing — silence is indistinguishable ` +
+            `from an omission.`,
+        );
+      }
+    }
+    if (f.pointsByValue && f.type !== 'enum') {
+      throw new PackError(`${f.path}: only enum fields may use pointsByValue`);
     }
     if (f.pointsEach !== undefined && !Number.isFinite(f.pointsEach)) {
       throw new PackError(`${f.path}: pointsEach must be a finite number`);
@@ -248,6 +363,15 @@ export function validatePack(p: SeasonPack): void {
 export function loadPack(raw: unknown): SeasonPack {
   if (typeof raw !== 'object' || raw === null) throw new PackError('pack is not an object');
   const p = raw as SeasonPack;
-  validatePack(p);
+  if (!Array.isArray(p.fields)) throw new PackError('pack has no fields array');
+  if (!Array.isArray(p.rankingPoints)) throw new PackError('pack has no rankingPoints array');
+  try {
+    validatePack(p);
+  } catch (err) {
+    // Callers catch PackError; a raw TypeError from a malformed shape leaking
+    // through would bypass every error path they wrote.
+    if (err instanceof PackError) throw err;
+    throw new PackError(`malformed pack: ${(err as Error).message}`);
+  }
   return p;
 }

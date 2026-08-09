@@ -55,6 +55,7 @@
       "type": "enum",
       "unit": "category",
       "values": ["None", "Park", "Low", "High"],
+      "pointsByValue": { "None": 0, "Park": 2, "Low": 6, "High": 12 },
       "additive": false,
       "attribution": "robot_slot",
       "concept": "endgame.climb.level",
@@ -78,8 +79,19 @@
       "attribution": "alliance",
       "concept": "penalty.points",
       "maxPlausiblePerMatch": 100
+    },
+    {
+      "path": "adjust.points",
+      "type": "integer",
+      "unit": "points",
+      "additive": false,
+      "attribution": "alliance",
+      "concept": "adjustment.points",
+      "allowNegative": true,
+      "maxPlausiblePerMatch": 100
     }
   ],
+  "ignoredPaths": ["totalPoints", "rp", "foulCount", "techFoulCount"],
   "rankingPoints": [
     {
       "key": "fuel_rp",

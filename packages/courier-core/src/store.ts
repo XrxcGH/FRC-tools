@@ -45,6 +45,8 @@ export class RecordStore {
   readonly #byId = new Map<string, StoredRecord>();
   /** Sorted bytewise by record-id. The digest layer depends on this order. */
   readonly #sorted: Uint8Array[] = [];
+  /** observationKey -> records, so per-observation reads are not a full scan. */
+  readonly #byObservation = new Map<string, StoredRecord[]>();
   #bytes = 0;
 
   get size(): number {
@@ -92,6 +94,10 @@ export class RecordStore {
     };
     this.#byId.set(hex, stored);
     this.#insertSorted(opened.recordId);
+    const obs = observationKey(opened.record);
+    const bucket = this.#byObservation.get(obs);
+    if (bucket) bucket.push(stored);
+    else this.#byObservation.set(obs, [stored]);
     this.#bytes += envelope.length;
     return { status: 'admitted', recordId: opened.recordId };
   }
@@ -113,25 +119,44 @@ export class RecordStore {
    * point, not a bug to be deduplicated away.
    */
   forObservation(eventKey: string, match: number, team: number): StoredRecord[] {
-    const want = `${eventKey}/${match}/${team}`;
-    const out: StoredRecord[] = [];
-    for (const s of this.#byId.values()) {
-      if (observationKey(s.record) === want) out.push(s);
-    }
-    return out.sort((a, b) => compareRecords(a.record, b.record));
+    const bucket = this.#byObservation.get(`${eventKey}/${match}/${team}`);
+    if (!bucket) return [];
+    return [...bucket].sort((a, b) => compareRecords(a.record, b.record));
   }
 
   /**
    * The current record from each scout for one observation, with superseded
    * revisions filtered out. One entry per scout — so a double-scouted match
    * still yields two, which is what the reliability model consumes.
+   *
+   * A supersede pointer is honoured ONLY when it targets a record by the same
+   * scout. `supersedes` is an arbitrary 32-byte value chosen by whoever sealed
+   * the record, so without this check any scout could point at a rival's
+   * observation and delete it from the current view — silently destroying the
+   * second opinion that scout-reliability estimation exists to consume, while
+   * both records sit innocently in the append-only log.
+   *
+   * A cross-scout pointer is ignored rather than rejected at admission: the
+   * record is still a valid signed observation and belongs in the log. It just
+   * does not get to speak for anyone else.
    */
   currentForObservation(eventKey: string, match: number, team: number): StoredRecord[] {
     const all = this.forObservation(eventKey, match, team);
+
+    const byIdLocal = new Map<string, StoredRecord>();
+    for (const s of all) byIdLocal.set(toHex(s.recordId), s);
+
     const superseded = new Set<string>();
     for (const s of all) {
-      if (s.record.supersedes) superseded.add(toHex(s.record.supersedes));
+      if (!s.record.supersedes) continue;
+      const targetHex = toHex(s.record.supersedes);
+      const target = byIdLocal.get(targetHex);
+      // Unknown target: not ours to act on. Same-scout only.
+      if (!target) continue;
+      if (toHex(target.record.scout) !== toHex(s.record.scout)) continue;
+      superseded.add(targetHex);
     }
+
     const byScout = new Map<string, StoredRecord>();
     for (const s of all) {
       if (superseded.has(toHex(s.recordId))) continue;

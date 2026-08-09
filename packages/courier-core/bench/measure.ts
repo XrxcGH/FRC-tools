@@ -222,11 +222,26 @@ for (const diff of [0, 2, 10, 50, 100, 200, 400]) {
 }
 say();
 say(
-  'Round trips stay flat as the difference grows, which is the property that matters on a ' +
-    'transport where each round trip costs ~1.8 s of connection setup. Protocol overhead is ' +
-    'dominated by the one truncated-id list (8 bytes per record held), so it scales with store ' +
-    'size rather than difference size — the deliberate trade made by `LEAF_THRESHOLD` (2048), ' +
-    'which buys a round trip with a few kB.',
+  'Two separate effects are visible here, and they should not be confused.',
+);
+say();
+say(
+  '**Discovery is flat.** Finding *which* records differ always costs the same two round trips ' +
+    'and ~5.5-7 kB, whether the difference is 2 records or 400. That is the property that ' +
+    'matters on a transport where each round trip costs ~1.8 s of connection setup. The overhead ' +
+    'is dominated by a single truncated-id list at 8 bytes per record *held* — so it scales with ' +
+    'store size, not difference size, which is the deliberate trade `LEAF_THRESHOLD` (2048) ' +
+    'makes: it buys a round trip for a few kB.',
+);
+say();
+say(
+  '**Transfer is chunked**, at ' +
+    '32 records per frame, which is why round trips grow past a ~50-record difference. This is ' +
+    'deliberate. A message is atomic, so an unchunked transfer is all-or-nothing: a link dying ' +
+    'at 7 s of an 8 s transfer would deliver nothing, silently falsifying the claim that a ' +
+    'half-finished session is simply a smaller one. Each frame that lands is progress that ' +
+    'survives the drop, and the extra frames cost bandwidth rather than connection setup, since ' +
+    'they ride an already-open link.',
 );
 say();
 

@@ -9,6 +9,18 @@
 
 import { PackError, type PackField, type SeasonPack } from './pack.ts';
 
+/** Every leaf path in a nested breakdown, dotted. */
+export function* leafPaths(obj: Record<string, unknown>, prefix = ''): Generator<string> {
+  for (const [k, v] of Object.entries(obj)) {
+    const path = prefix ? `${prefix}.${k}` : k;
+    if (v !== null && typeof v === 'object' && !Array.isArray(v)) {
+      yield* leafPaths(v as Record<string, unknown>, path);
+    } else {
+      yield path;
+    }
+  }
+}
+
 export type Breakdown = Record<string, unknown>;
 
 /** Read a dotted path out of a nested FMS score breakdown. */
@@ -61,11 +73,26 @@ export class PackIndex {
     return this.pack.fields.filter((f) => f.attribution === 'robot_slot');
   }
 
+  /** Whether a field declares how it converts to points at all. */
+  isPriced(f: PackField): boolean {
+    if (f.type === 'enum') return f.pointsByValue !== undefined;
+    if (f.unit === 'points') return true;
+    if (f.unit === 'category') return false;
+    return f.pointsEach !== undefined;
+  }
+
   /** Points contributed by one field at one value. */
   pointsFor(path: string, value: unknown): number {
     const f = this.#byPath.get(path);
     if (!f) throw new PackError(`unknown field "${path}"`);
+
+    if (f.type === 'enum') {
+      // Every real FRC endgame is an enum level. Scoring them is not optional.
+      if (!f.pointsByValue) return 0;
+      return f.pointsByValue[String(value)] ?? 0;
+    }
     if (f.unit === 'points') return asNumber(value, path);
+    if (f.unit === 'category') return 0;
     if (f.pointsEach === undefined) return 0;
     if (f.type === 'boolean') return value === true ? f.pointsEach : 0;
     return asNumber(value, path) * f.pointsEach;
@@ -77,19 +104,33 @@ export class PackIndex {
    * A generic scoring engine is the thing Cheesy Arena rebuilds by hand months
    * after every kickoff, and the thing that makes Week 0 events possible with
    * current-game scoring.
+   *
+   * `unpriced` lists fields that were present in the breakdown but carry no
+   * points model, so a caller can tell "scored zero" from "could not be
+   * scored". Returning a total that silently omits them is how `reconcileTotal`
+   * ends up sending a pack author hunting in the wrong place.
    */
-  scoreBreakdown(breakdown: Breakdown): { total: number; byField: Map<string, number> } {
+  scoreBreakdown(breakdown: Breakdown): {
+    total: number;
+    byField: Map<string, number>;
+    unpriced: string[];
+  } {
     const byField = new Map<string, number>();
+    const unpriced: string[] = [];
     let total = 0;
+
     for (const f of this.pack.fields) {
       const raw = readPath(breakdown, f.path);
       if (raw === undefined || raw === null) continue;
-      if (f.unit === 'category' || f.type === 'enum') continue;
+      if (!this.isPriced(f)) {
+        unpriced.push(f.path);
+        continue;
+      }
       const pts = this.pointsFor(f.path, raw);
       if (pts !== 0) byField.set(f.path, pts);
       total += pts;
     }
-    return { total, byField };
+    return { total, byField, unpriced };
   }
 }
 
@@ -133,7 +174,9 @@ export function validateBreakdown(index: PackIndex, breakdown: Breakdown): Issue
         issues.push({ severity: 'error', path: f.path, message: `expected an integer, got ${JSON.stringify(raw)}` });
         continue;
       }
-      if (raw < 0) {
+      if (raw < 0 && !f.allowNegative) {
+        // Adjustment points are legitimately negative in real FMS breakdowns,
+        // so the field declares it rather than the validator guessing.
         issues.push({ severity: 'error', path: f.path, message: `negative value ${raw}` });
       }
       if (f.maxPlausiblePerMatch !== undefined && raw > f.maxPlausiblePerMatch) {
@@ -158,18 +201,26 @@ export function validateBreakdown(index: PackIndex, breakdown: Breakdown): Issue
     }
   }
 
-  // Anything present in the breakdown that the pack has never heard of is the
-  // signal that the pack is stale — usually because a Team Update changed
-  // scoring mid-season. That is worth surfacing loudly, since a silently stale
-  // pack produces confidently wrong numbers.
-  for (const key of Object.keys(breakdown)) {
-    if (!index.pack.fields.some((f) => f.path === key || f.path.startsWith(key + '.'))) {
-      issues.push({
-        severity: 'warning',
-        path: key,
-        message: 'present in the breakdown but absent from the pack — the pack may be stale',
-      });
-    }
+  // Anything present in the breakdown that the pack has never heard of signals
+  // a stale pack — usually a Team Update that changed scoring mid-season.
+  //
+  // This must walk LEAVES. Checking only top-level keys both misses the common
+  // case (a new field added inside an existing group: the pack knows
+  // `auto.fuel.high`, so a new `auto.fuel.mid` is hidden behind the satisfied
+  // `auto` prefix) and fires on every real match, because FMS breakdowns always
+  // carry aggregates like `totalPoints` and `rp`. A warning that always fires
+  // and never fires correctly is worse than no warning.
+  const known = new Set(index.pack.fields.map((f) => f.path));
+  const ignored = new Set(index.pack.ignoredPaths ?? []);
+  for (const path of leafPaths(breakdown)) {
+    if (known.has(path) || ignored.has(path)) continue;
+    issues.push({
+      severity: 'warning',
+      path,
+      message:
+        'present in the breakdown but absent from the pack — the pack may be stale, or add ' +
+        'this path to ignoredPaths if it is an aggregate the pack deliberately does not model',
+    });
   }
 
   return issues;
@@ -186,15 +237,19 @@ export function reconcileTotal(
   breakdown: Breakdown,
   officialTotal: number,
 ): Issue[] {
-  const { total } = index.scoreBreakdown(breakdown);
+  const { total, unpriced } = index.scoreBreakdown(breakdown);
   if (total === officialTotal) return [];
+  const hint = unpriced.length
+    ? ` Note that ${unpriced.length} field(s) were present but carry no points model, so they ` +
+      `contributed nothing: ${unpriced.join(', ')}. Price them before investigating elsewhere.`
+    : '';
   return [
     {
       severity: 'error',
       message:
         `pack arithmetic gives ${total} but the official total is ${officialTotal} ` +
         `(difference ${officialTotal - total}). Either the pack is missing a field, a ` +
-        `pointsEach is wrong, or the official record is — do not silently prefer one.`,
+        `points value is wrong, or the official record is — do not silently prefer one.${hint}`,
     },
   ];
 }
