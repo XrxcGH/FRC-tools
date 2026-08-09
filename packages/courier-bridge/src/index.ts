@@ -11,6 +11,8 @@ export {
   loadProfileSet,
   validateProfile,
   detectProfile,
+  matchingProfiles,
+  assertUnambiguous,
   readField,
   ProfileError,
   type BridgeProfile,
@@ -18,6 +20,7 @@ export {
   type ProfileFields,
   type ProfileFormat,
   type FieldRef,
+  type DetectResult,
 } from './profiles.ts';
 
 export {

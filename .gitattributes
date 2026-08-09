@@ -1,0 +1,8 @@
+# Normalise line endings in the repo; check out native on Windows.
+* text=auto eol=lf
+
+# Keep these exactly as written.
+*.cddl text eol=lf
+*.json text eol=lf
+*.ts   text eol=lf
+*.md   text eol=lf

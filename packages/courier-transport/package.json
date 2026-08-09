@@ -1,0 +1,16 @@
+{
+  "name": "@courier/transport",
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Links and bundles — running Courier anti-entropy over something other than memory",
+  "license": "Apache-2.0",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "dependencies": {
+    "@courier/core": "0.1.0"
+  },
+  "scripts": {
+    "test": "node --test \"test/*.test.ts\""
+  }
+}

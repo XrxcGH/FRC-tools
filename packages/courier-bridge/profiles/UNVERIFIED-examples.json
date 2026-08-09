@@ -1,0 +1,54 @@
+{
+  "version": 2,
+  "_comment": [
+    "NOT LOADED BY DEFAULT. These are worked examples, not working profiles.",
+    "",
+    "Field indices below have NOT been confirmed against real output from the named apps, and",
+    "are very likely wrong: both QRScout and ScoutingPASS let each team configure their own",
+    "column order, so there may be no single correct answer for either.",
+    "",
+    "Why they are not in bridge_profiles.json: detection refuses any payload that more than one",
+    "profile fits. A 6-column tab-separated payload fits both a generic profile and these, so",
+    "shipping them active would make the Bridge refuse ordinary payloads. Worse, if detection",
+    "resolved the tie instead of refusing, real QRScout data would seal under generic indices —",
+    "match and team read from the wrong columns, silently.",
+    "",
+    "To use one:",
+    "  1. Export a real QR payload from your team's actual configuration.",
+    "  2. Count the columns and correct the indices below.",
+    "  3. Add `exactFields` set to your column count, so it cannot collide with a generic profile.",
+    "  4. Verify a sealed record reads back the right team and match.",
+    "  5. Set verified: true, and load this file alongside bridge_profiles.json.",
+    "",
+    "Step 4 is not optional. A wrong index costs you a competition's scouting data and you will",
+    "not find out until you build a picklist on it."
+  ],
+  "profiles": [
+    {
+      "id": "qrscout.tsv.EXAMPLE",
+      "name": "QRScout (tab-separated) — EXAMPLE, indices unconfirmed",
+      "format": "delimited",
+      "delimiter": "\t",
+      "exactFields": 6,
+      "fields": { "scout": 0, "match": 2, "team": 3 },
+      "matchFormat": "number",
+      "schemaId": "qrscout.example",
+      "verified": false,
+      "scoutIdInBody": true,
+      "notes": "Indices unconfirmed. QRScout's column order is team-configurable. Confirm against a real export before use."
+    },
+    {
+      "id": "scoutingpass.tsv.EXAMPLE",
+      "name": "ScoutingPASS (tab-separated) — EXAMPLE, indices unconfirmed",
+      "format": "delimited",
+      "delimiter": "\t",
+      "exactFields": 7,
+      "fields": { "scout": 1, "match": 2, "team": 4 },
+      "matchFormat": "number",
+      "schemaId": "scoutingpass.example",
+      "verified": false,
+      "scoutIdInBody": true,
+      "notes": "Indices unconfirmed. ScoutingPASS is configured per team via a JSON config, so column order varies by deployment. Confirm against a real export before use."
+    }
+  ]
+}

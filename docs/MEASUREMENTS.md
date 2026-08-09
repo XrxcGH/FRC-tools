@@ -27,8 +27,8 @@ Overhead is 186-191 bytes and steps only where CBOR length headers widen (186 be
 | Distinct scouts | 8 |
 | Total envelope bytes | 167.5 kB |
 | Mean envelope | 268 B |
-| Seal + verify + store, wall clock | 2361 ms |
-| Per record | 3.69 ms |
+| Seal + verify + store, wall clock | 1526 ms |
+| Per record | 2.38 ms |
 
 Transfer time for the whole day's data, at the throughput figures the design uses:
 
@@ -50,20 +50,24 @@ Two stores, 640 records each at full overlap, then diverged by the stated amount
 | 2 | 4 | 2 | 6.2 kB | 5.7 kB | yes |
 | 10 | 4 | 2 | 8.2 kB | 5.6 kB | yes |
 | 50 | 4 | 2 | 18.7 kB | 5.7 kB | yes |
-| 100 | 4 | 2 | 31.7 kB | 5.5 kB | yes |
-| 200 | 4 | 2 | 58.3 kB | 6.0 kB | yes |
-| 400 | 4 | 2 | 111.6 kB | 6.9 kB | yes |
+| 100 | 6 | 3 | 31.7 kB | 5.5 kB | yes |
+| 200 | 10 | 5 | 58.4 kB | 6.0 kB | yes |
+| 400 | 16 | 8 | 111.7 kB | 7.0 kB | yes |
 
-Round trips stay flat as the difference grows, which is the property that matters on a transport where each round trip costs ~1.8 s of connection setup. Protocol overhead is dominated by the one truncated-id list (8 bytes per record held), so it scales with store size rather than difference size — the deliberate trade made by `LEAF_THRESHOLD` (2048), which buys a round trip with a few kB.
+Two separate effects are visible here, and they should not be confused.
+
+**Discovery is flat.** Finding *which* records differ always costs the same two round trips and ~5.5-7 kB, whether the difference is 2 records or 400. That is the property that matters on a transport where each round trip costs ~1.8 s of connection setup. The overhead is dominated by a single truncated-id list at 8 bytes per record *held* — so it scales with store size, not difference size, which is the deliberate trade `LEAF_THRESHOLD` (2048) makes: it buys a round trip for a few kB.
+
+**Transfer is chunked**, at 32 records per frame, which is why round trips grow past a ~50-record difference. This is deliberate. A message is atomic, so an unchunked transfer is all-or-nothing: a link dying at 7 s of an 8 s transfer would deliver nothing, silently falsifying the claim that a half-finished session is simply a smaller one. Each frame that lands is progress that survives the drop, and the extra frames cost bandwidth rather than connection setup, since they ride an already-open link.
 
 ## 4. Crypto throughput
 
 | Operation | Per record | Records/second |
 |---|---:|---:|
-| Seal (encode + Ed25519 sign) | 0.66 ms | 1516 |
-| Open (verify + decode + validate) | 2.57 ms | 389 |
+| Seal (encode + Ed25519 sign) | 0.42 ms | 2383 |
+| Open (verify + decode + validate) | 1.69 ms | 591 |
 
-On this machine a peer can verify a full event day (640 records) in 1.6 s. A 2016-class Chromebook or a low-end Android tablet should be assumed several times slower — see the open items below, because that factor has not been measured on real hardware.
+On this machine a peer can verify a full event day (640 records) in 1.1 s. A 2016-class Chromebook or a low-end Android tablet should be assumed several times slower — see the open items below, because that factor has not been measured on real hardware.
 
 ## 5. Not measured here — these cells stay empty on purpose
 
