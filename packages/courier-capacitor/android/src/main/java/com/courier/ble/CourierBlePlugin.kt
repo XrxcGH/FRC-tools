@@ -1,4 +1,14 @@
 /*
+ * NOT COMPILED, NOT RUN, NO DEVICE.
+ *
+ * This file was written against the plugin contract in
+ * packages/courier-capacitor/src/definitions.ts and cross-reviewed against the
+ * Swift half. It has never seen a Kotlin compiler, an Android SDK, or a radio.
+ * Expect the first build to find real errors, and see
+ * packages/courier-capacitor/NATIVE-STATUS.md for the defects already known and
+ * not yet fixed.
+ */
+/*
  * Courier — the Android half of the plugin boundary.
  *
  * Nine methods and four events, exactly as declared in
@@ -9,7 +19,7 @@
  * anti-entropy protocol are all portable TypeScript with tests that run on a
  * laptop with no radio, and they stay there.
  *
- *   capabilities        what this device can actually do, verified at runtime
+ *   capabilities        what this device reports it can do, queried at runtime
  *   requestPermissions  the runtime permissions Android demands
  *   startAdvertising    peripheral role: be findable
  *   stopAdvertising
@@ -621,6 +631,15 @@ class CourierBlePlugin : Plugin() {
         } catch (e: IllegalArgumentException) {
             // Deliberately does not echo the value: it is a scouting record.
             call.reject("The packet was not valid base64.")
+            return
+        }
+
+        // An empty packet is always a caller bug — every Courier frame carries
+        // at least a 5-byte header — and handing one to the stack spends a
+        // connection event delivering nothing. Swift already rejects it; without
+        // this the same JavaScript behaves differently on the two platforms.
+        if (packet.isEmpty()) {
+            call.reject("The packet was empty. Every Courier frame carries a header.")
             return
         }
 
