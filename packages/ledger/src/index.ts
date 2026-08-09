@@ -60,6 +60,17 @@ export {
 } from './first.ts';
 
 export {
+  fetchEvent,
+  makeVenuePack,
+  credentialsFromEnv,
+  nodeFetch,
+  type LedgerResult,
+  type FetchOptions,
+  type PackOptions,
+  type Credentials as LedgerCredentials,
+} from './cli.ts';
+
+export {
   buildBulkExport,
   toNdjson,
   toCsv,

@@ -12,5 +12,8 @@
   },
   "scripts": {
     "test": "node --test \"test/*.test.ts\""
+  },
+  "bin": {
+    "ledger": "./src/main.ts"
   }
 }
