@@ -1,0 +1,22 @@
+{
+  "name": "@courier/cli",
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Command-line Courier: pair devices, ingest scans, move data by file",
+  "license": "Apache-2.0",
+  "bin": {
+    "courier": "./src/main.ts"
+  },
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "dependencies": {
+    "@courier/core": "0.1.0",
+    "@courier/bridge": "0.1.0",
+    "@courier/pairing": "0.1.0",
+    "@courier/transport": "0.1.0"
+  },
+  "scripts": {
+    "test": "node --test \"test/*.test.ts\""
+  }
+}
