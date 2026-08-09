@@ -5,14 +5,39 @@
   "description": "The Capacitor plugin boundary — the exact surface native BLE code must implement",
   "license": "Apache-2.0",
   "exports": {
-    ".": "./src/index.ts"
+    ".": "./src/index.ts",
+    "./plugin": "./src/plugin.ts"
+  },
+  "files": [
+    "src",
+    "android/src",
+    "android/build.gradle",
+    "CourierBle.podspec",
+    "ios/Sources",
+    "README.md"
+  ],
+  "capacitor": {
+    "ios": {
+      "src": "ios"
+    },
+    "android": {
+      "src": "android"
+    }
   },
   "dependencies": {
     "@courier/ble": "0.1.0",
     "@courier/core": "0.1.0",
     "@courier/transport": "0.1.0"
   },
+  "peerDependencies": {
+    "@capacitor/core": ">=6.0.0"
+  },
+  "peerDependenciesMeta": {
+    "@capacitor/core": {
+      "optional": true
+    }
+  },
   "scripts": {
-    "test": "node --test \"test/*.test.ts\""
+    "test": "node --experimental-strip-types --test \"test/*.test.ts\""
   }
 }

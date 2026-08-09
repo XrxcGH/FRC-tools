@@ -218,6 +218,13 @@ internal class CourierGattServer(
         // device — so drop any advertisement already running.
         stopAdvertising()
 
+        // ...and settle any earlier start still waiting on service registration,
+        // or its promise never resolves and its caller waits forever.
+        serviceTimeout?.let { main.removeCallbacks(it) }
+        serviceTimeout = null
+        pendingStart?.done("Superseded by a later startAdvertising call.")
+        pendingStart = null
+
         val start = PendingStart(label, callback)
         if (serviceReady) {
             beginAdvertising(start)
@@ -284,7 +291,7 @@ internal class CourierGattServer(
         // reads it from CBAdvertisementDataServiceDataKey. When it is absent,
         // the scanner falls back to the advertised local name, which is what an
         // iOS peripheral publishes via CBAdvertisementDataLocalNameKey.
-        val labelBytes = truncateUtf8(label, CourierProfile.MAX_LABEL_BYTES)
+        val labelBytes = truncateUtf8(start.label, CourierProfile.MAX_LABEL_BYTES)
         val scanResponse = AdvertiseData.Builder()
             .setIncludeDeviceName(false)
             .addServiceData(ParcelUuid(CourierProfile.SERVICE), labelBytes)
@@ -328,6 +335,8 @@ internal class CourierGattServer(
             Log.i(TAG, "advertising stopped")
         } catch (e: SecurityException) {
             Log.w(TAG, "could not stop advertising: permission revoked")
+        } catch (e: IllegalStateException) {
+            // Bluetooth went off underneath us; the advertisement is already dead.
         }
     }
 
@@ -452,6 +461,7 @@ internal class CourierGattServer(
         return SendResult.ACCEPTED
     }
 
+    @Suppress("DEPRECATION")
     private fun notifyCompat(
         srv: BluetoothGattServer,
         device: BluetoothDevice,
@@ -469,7 +479,6 @@ internal class CourierGattServer(
         // is shared by every subscribed device. Setting it and notifying must
         // therefore be atomic with respect to other senders, or two peers race
         // and one receives the other's bytes.
-        @Suppress("DEPRECATION")
         return synchronized(characteristic) {
             characteristic.value = packet
             srv.notifyCharacteristicChanged(device, characteristic, false)
@@ -494,6 +503,9 @@ internal class CourierGattServer(
         stopAdvertising()
         serviceTimeout?.let { main.removeCallbacks(it) }
         serviceTimeout = null
+        // Settle rather than drop: a startAdvertising still waiting on service
+        // registration when Bluetooth goes off must be told, not left hanging.
+        pendingStart?.done(reason ?: "Advertising was stopped before it started.")
         pendingStart = null
 
         val srv = server
@@ -713,16 +725,25 @@ internal class CourierGattServer(
      * have edited. Courier never asks for or transmits a person's name.
      */
     private fun labelOf(device: BluetoothDevice): String {
-        val name = try {
-            device.name
-        } catch (e: SecurityException) {
-            null
-        }
-        return if (name.isNullOrBlank()) "unknown-device" else name
+        // Deliberately empty, and deliberately NOT device.name.
+        //
+        // An Android adapter name is very often a person's name — "Eric's
+        // Pixel" is the default on a lot of phones. CourierPeer.label is
+        // documented as a DEVICE label and never a person's, and a value read
+        // here crosses the bridge, lands in the UI, and ends up pasted into bug
+        // reports. This project holds no personal data and this is one of the
+        // few places it could arrive by accident.
+        //
+        // A central that connected to us was not advertising, so no Courier
+        // label exists over the air. Empty is the honest answer; the UI renders
+        // "unnamed device". It also saves a BLUETOOTH_CONNECT-gated call.
+        // Matches CourierPeripheral.swift, which refuses for the same reason.
+        return ""
     }
 }
 
 /** sendResponse throws if the connection dropped mid-request; that is not fatal. */
+@SuppressLint("MissingPermission")
 private fun BluetoothGattServer.trySendResponse(
     device: BluetoothDevice,
     requestId: Int,
@@ -731,7 +752,6 @@ private fun BluetoothGattServer.trySendResponse(
     value: ByteArray?,
 ) {
     try {
-        @Suppress("MissingPermission")
         sendResponse(device, requestId, status, offset, value)
     } catch (e: SecurityException) {
         // permission revoked mid-connection; the link is finished anyway

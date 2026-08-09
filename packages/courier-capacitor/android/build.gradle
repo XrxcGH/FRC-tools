@@ -1,0 +1,64 @@
+// Supporting scaffolding for the plugin module. The Kotlin under src/main is
+// the deliverable; this file exists so that it compiles.
+//
+// Versions are deliberately conservative and should be aligned with whatever
+// Capacitor version the host app uses — a plugin module compiled against a
+// different major than the app is the usual cause of a NoSuchMethodError at
+// bridge time.
+
+ext {
+    kotlinVersion = project.hasProperty('kotlin_version') ? project.kotlin_version : '1.9.24'
+}
+
+buildscript {
+    repositories {
+        google()
+        mavenCentral()
+    }
+    dependencies {
+        classpath 'com.android.tools.build:gradle:8.5.2'
+        classpath "org.jetbrains.kotlin:kotlin-gradle-plugin:1.9.24"
+    }
+}
+
+apply plugin: 'com.android.library'
+apply plugin: 'org.jetbrains.kotlin.android'
+
+android {
+    namespace 'com.courier.ble'
+
+    // compileSdk 34 so the API 33 Bluetooth methods — the ones that return a
+    // BluetoothStatusCodes int instead of a boolean — are resolvable. Every use
+    // of them is behind a Build.VERSION.SDK_INT check.
+    compileSdk 34
+
+    defaultConfig {
+        // See android/README.md: 23 is Capacitor's floor and Android's
+        // runtime-permission floor, and FRC teams run donated hardware.
+        minSdk 23
+        targetSdk 34
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+
+    kotlinOptions {
+        jvmTarget = '17'
+    }
+
+    lint {
+        abortOnError false
+    }
+}
+
+repositories {
+    google()
+    mavenCentral()
+}
+
+dependencies {
+    implementation project(':capacitor-android')
+    implementation "org.jetbrains.kotlin:kotlin-stdlib:$kotlinVersion"
+}

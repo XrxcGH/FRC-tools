@@ -29,8 +29,9 @@ final class CourierPeripheral: NSObject {
     private let log = Logger(subsystem: CourierGatt.logSubsystem, category: "peripheral")
 
     private var manager: CBPeripheralManager?
+    /// Held because `updateValue` needs the mutable characteristic object; the
+    /// RX characteristic needs no reference, since writes arrive as ATT requests.
     private var txCharacteristic: CBMutableCharacteristic?
-    private var rxCharacteristic: CBMutableCharacteristic?
 
     private enum ServicePublication {
         case absent
@@ -223,7 +224,6 @@ final class CourierPeripheral: NSObject {
         service.characteristics = [tx, rx]
 
         txCharacteristic = tx
-        rxCharacteristic = rx
         servicePublication = .adding
         // Idempotent: this is only reached when nothing of ours is published, so
         // clearing first makes a second publication after a radio restart safe
@@ -405,7 +405,6 @@ extension CourierPeripheral: CBPeripheralManagerDelegate {
         default:
             servicePublication = .absent
             txCharacteristic = nil
-            rxCharacteristic = nil
             dropAllCentrals(reason: "Bluetooth became unavailable on this device")
             settleAdvertiseWaiters(CourierBleError(Self.unavailableSentence(for: peripheral.state)))
         }

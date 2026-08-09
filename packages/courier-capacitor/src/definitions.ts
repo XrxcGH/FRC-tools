@@ -60,7 +60,7 @@ export interface CourierConnection {
 /**
  * The native plugin.
  *
- * Nine methods and three events. If this file grows, the argument for the whole
+ * Nine methods and four events. If this file grows, the argument for the whole
  * architecture weakens, so additions should be resisted rather than accepted.
  */
 export interface CourierBlePlugin {

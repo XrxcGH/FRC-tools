@@ -1,0 +1,54 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Permissions for the Courier BLE plugin. See android/README.md for why each
+  one is here and what it does and does not let the app see.
+
+  Nothing is declared that Courier does not use. In particular there is no
+  ACCESS_BACKGROUND_LOCATION and no ACCESS_COARSE_LOCATION beyond the API-30
+  scan requirement, because Courier never derives a position from a scan.
+-->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
+
+    <!-- Android 11 and earlier: install-time permissions, never requested at runtime. -->
+    <uses-permission
+        android:name="android.permission.BLUETOOTH"
+        android:maxSdkVersion="30" />
+    <uses-permission
+        android:name="android.permission.BLUETOOTH_ADMIN"
+        android:maxSdkVersion="30" />
+
+    <!--
+      Android 6 through 11 returned no BLE scan results without a location
+      permission, on the reasoning that a list of nearby radios is a position
+      fix if you hold a map of them. Courier never uses it that way, so it is
+      capped at API 30 and dropped entirely from Android 12 on.
+    -->
+    <uses-permission
+        android:name="android.permission.ACCESS_FINE_LOCATION"
+        android:maxSdkVersion="30" />
+
+    <!--
+      Android 12+ (API 31) split Bluetooth by what an app does with the radio.
+      neverForLocation is an assertion the platform enforces: scan results are
+      stripped of anything that could be used to infer location, and in exchange
+      no location permission is required. Courier only needs to know which
+      Courier devices are nearby, so the assertion is honest.
+    -->
+    <uses-permission
+        android:name="android.permission.BLUETOOTH_SCAN"
+        android:usesPermissionFlags="neverForLocation"
+        tools:targetApi="s" />
+    <uses-permission android:name="android.permission.BLUETOOTH_ADVERTISE" />
+    <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />
+
+    <!--
+      required="false" on purpose: a device with no BLE radio can still ingest
+      QR codes and move bundles over USB, and refusing to install on it would
+      take away the fallback that always works.
+    -->
+    <uses-feature
+        android:name="android.hardware.bluetooth_le"
+        android:required="false" />
+
+</manifest>
