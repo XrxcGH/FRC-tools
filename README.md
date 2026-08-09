@@ -85,6 +85,7 @@ Two things the code deliberately refuses to do. Courier **never parses a body** 
 | [docs/CRITIQUE.md](docs/CRITIQUE.md) | The adversarial review: 39 defects, 5 required additions, the verdict |
 | [docs/STRATEGY.md](docs/STRATEGY.md) | Product selection: impact/feasibility scoring, the rejected set, the constraints in raw form |
 | [docs/CONSTRAINTS.md](docs/CONSTRAINTS.md) | The 22 constraints any FRC tool must respect — **useful on its own** |
+| [docs/SUCCESSION.md](docs/SUCCESSION.md) | The credential inventory, the June handover, the January capacity plan, and the kill criteria |
 | [docs/NOT-BUILDING.md](docs/NOT-BUILDING.md) | 21 deliberately rejected ideas and the evidence |
 | [docs/MEASUREMENTS.md](docs/MEASUREMENTS.md) | Measured wire sizes, reconciliation cost, and crypto throughput — plus what is still unmeasured |
 
