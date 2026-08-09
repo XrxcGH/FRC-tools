@@ -60,6 +60,20 @@ export {
 } from './first.ts';
 
 export {
+  buildBulkExport,
+  toNdjson,
+  toCsv,
+  cacheControlFor,
+  BulkError,
+  BULK_FORMAT_VERSION,
+  type BulkExport,
+  type BulkArtifact,
+  type BulkManifest,
+  type BuildBulkInput,
+  type ContentType,
+} from './bulk.ts';
+
+export {
   reconcileSnapshots,
   summariseConflicts,
   type Source,
