@@ -47,6 +47,29 @@ export {
 } from './tba.ts';
 
 export {
+  FirstClient,
+  FirstApiError,
+  splitEventKey,
+  compLevelFor,
+  normaliseFirstTeams,
+  normaliseFirstMatches,
+  type FirstTeam,
+  type FirstMatch,
+  type FirstStation,
+  type FirstSnapshot,
+} from './first.ts';
+
+export {
+  reconcileSnapshots,
+  summariseConflicts,
+  type Source,
+  type Conflict,
+  type ConflictKind,
+  type ReconcileInput,
+  type ReconcileOutput,
+} from './reconcile.ts';
+
+export {
   buildVenuePack,
   openVenuePack,
   describeStaleness,
