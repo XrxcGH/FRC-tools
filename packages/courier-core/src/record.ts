@@ -141,8 +141,10 @@ export function validateRecord(r: CourierRecord): void {
       `event key "${r.eventKey}" must be ${LIMITS.EVENT_KEY_MIN}..${LIMITS.EVENT_KEY_MAX} characters`,
     );
   }
-  if (!Number.isInteger(r.match) || r.match < 0) {
-    throw new RecordError('packed match must be a non-negative integer');
+  // Bounded at 32 bits by the packing scheme's shift widths (spec §2). Without
+  // this the record type admits values the match unpacker cannot represent.
+  if (!Number.isInteger(r.match) || r.match < 0 || r.match > 0xffffffff) {
+    throw new RecordError(`packed match ${r.match} is not a 32-bit unsigned integer`);
   }
   if (!Number.isInteger(r.team) || r.team < 1 || r.team > LIMITS.TEAM_MAX) {
     throw new RecordError(`team ${r.team} out of range 1..${LIMITS.TEAM_MAX}`);
