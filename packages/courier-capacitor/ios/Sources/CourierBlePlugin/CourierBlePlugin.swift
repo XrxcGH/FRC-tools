@@ -563,14 +563,21 @@ extension CourierBlePlugin: CourierEventSink {
     /// signed but not encrypted, and `os.Logger` output is readable by anyone
     /// with the device on a cable. Lifecycle only.
     func emitPacketReceived(peerId: String, base64: String) {
-        // `retainUntilConsumed` matters here. `openLink()` in transport.ts calls
-        // `connect()` and only then attaches its listeners, so a peer that
-        // starts notifying immediately can produce a packet in the window before
-        // anything in JS is listening. Without retention that packet is dropped,
-        // the reassembler never sees sequence 0, and the sync stalls on a frame
-        // that will never complete. Retaining costs memory bounded by what a
-        // peer sends before its own 15-second stall timeout fires.
-        notify("packetReceived", ["peerId": peerId, "packet": base64], retain: true)
+        // NOT retained, deliberately.
+        //
+        // An earlier version retained this to cover the window where JS had
+        // connected but not yet attached listeners. That fix was worse than the
+        // bug: Capacitor flushes a retained queue to whichever listener attaches
+        // FIRST, so on a device holding two inbound links, peer A's transport
+        // receives peer B's packets, filters them out by peerId, and drops them.
+        // B never learns they existed. A dropped packet costs a frame; a stolen
+        // one costs a frame and also looks like radio flakiness in a pit.
+        //
+        // The window is now closed on the JavaScript side instead:
+        // `CourierBleHub` registers the four listeners once, before any
+        // connection exists, and demultiplexes by peerId with per-peer
+        // buffering. See src/hub.ts.
+        notify("packetReceived", ["peerId": peerId, "packet": base64], retain: false)
     }
 
     func emitReadyToWrite(peerId: String) {
@@ -590,10 +597,11 @@ extension CourierBlePlugin: CourierEventSink {
     func emitDisconnected(peerId: String, reason: String?) {
         var data: [String: Any] = ["peerId": peerId]
         if let reason { data["reason"] = reason }
-        // Retained for the same reason as packets, and with worse consequences
-        // if dropped: a link that misses its disconnect waits on `receive()`
-        // forever. On an event floor a peer walking away is the ordinary case.
-        notify("disconnected", data, retain: true)
+        // Not retained, for the same reason as packets: a retained disconnect
+        // would be delivered to the first listener to attach, which may be a
+        // different peer's transport. The hub's listeners are registered before
+        // any connection exists, so there is no window to cover.
+        notify("disconnected", data, retain: false)
     }
 
     /// All four events funnel through here so the ordering argument lives in one

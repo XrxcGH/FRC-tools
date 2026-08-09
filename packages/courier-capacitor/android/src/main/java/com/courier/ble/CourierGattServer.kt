@@ -1,4 +1,14 @@
 /*
+ * NOT COMPILED, NOT RUN, NO DEVICE.
+ *
+ * This file was written against the plugin contract in
+ * packages/courier-capacitor/src/definitions.ts and cross-reviewed against the
+ * Swift half. It has never seen a Kotlin compiler, an Android SDK, or a radio.
+ * Expect the first build to find real errors, and see
+ * packages/courier-capacitor/NATIVE-STATUS.md for the defects already known and
+ * not yet fixed.
+ */
+/*
  * Courier — the peripheral half.
  *
  * A BluetoothGattServer carrying the Courier service, plus the advertisement

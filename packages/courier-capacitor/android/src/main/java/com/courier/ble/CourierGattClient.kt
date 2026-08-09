@@ -1,4 +1,14 @@
 /*
+ * NOT COMPILED, NOT RUN, NO DEVICE.
+ *
+ * This file was written against the plugin contract in
+ * packages/courier-capacitor/src/definitions.ts and cross-reviewed against the
+ * Swift half. It has never seen a Kotlin compiler, an Android SDK, or a radio.
+ * Expect the first build to find real errors, and see
+ * packages/courier-capacitor/NATIVE-STATUS.md for the defects already known and
+ * not yet fixed.
+ */
+/*
  * Courier — the central half.
  *
  * Scan for the Courier service, connect, negotiate an MTU, subscribe to the
@@ -55,12 +65,16 @@ internal class CourierGattClient(
          * Give up on a connection attempt after this long.
          *
          * Android's own connect has no timeout with autoConnect=false — it
-         * fails eventually with status 133, but "eventually" is not a number I
-         * can quote, and an operator holding two tablets together needs to be
-         * told it did not work. Unverified: 20 s is a judgement call, not a
-         * measurement.
+         * fails eventually with status 133, but "eventually" is not a number
+         * anyone can quote, and an operator holding two tablets together needs
+         * to be told it did not work.
+         *
+         * 15 s, matching CourierGatt.connectTimeout on iOS. The value is a
+         * judgement call rather than a measurement, but it must be the SAME
+         * judgement call on both platforms: a user-visible timeout that differs
+         * by platform is a support question nobody can answer.
          */
-        const val CONNECT_TIMEOUT_MS = 20_000L
+        const val CONNECT_TIMEOUT_MS = 15_000L
 
         /**
          * How long to wait before deciding a scan started successfully.
@@ -244,7 +258,12 @@ internal class CourierGattClient(
         val previous = lastReported[peerId]
         if (previous != null && now - previous < PEER_REPORT_INTERVAL_MS) return
         lastReported[peerId] = now
-        events.onPeerFound(peerId, labelOf(result), result.rssi)
+        // 127 is the "RSSI unavailable" sentinel, and any non-negative value is
+        // meaningless for a received signal. Passing it through renders as a
+        // full-strength bar, which is worse than showing nothing. Swift already
+        // drops these; match it.
+        val rssi = result.rssi.takeIf { it < 0 }
+        events.onPeerFound(peerId, labelOf(result), rssi)
     }
 
     /**
@@ -269,7 +288,11 @@ internal class CourierGattClient(
         }
         val advertised = record?.deviceName?.trim()
         if (!advertised.isNullOrEmpty()) return advertised
-        return "unknown-device"
+        // Empty, not a placeholder string. All four label paths across both
+        // platforms return "" when no Courier label is available, so a UI has
+        // one case to handle and can render "unnamed device" itself rather than
+        // three different sentinels leaking through from three code paths.
+        return ""
     }
 
     /* ---------------------------------------------------------------------- */
@@ -452,11 +475,13 @@ internal class CourierGattClient(
      * Write without response.
      *
      * Symmetrical with the notify direction, which is also unacknowledged at
-     * the ATT layer, and roughly twice the throughput of an acknowledged write
-     * because it does not wait a connection interval per packet. It is not
-     * lossy: the link layer retransmits, and a local buffer that is full
-     * refuses the write rather than dropping it — which is precisely the
-     * refusal this function reports.
+     * the ATT layer. Documented behaviour is that it avoids waiting a
+     * connection interval per packet, which should make it substantially
+     * faster than an acknowledged write — that is a reading of the spec, NOT a
+     * measurement, and nobody has run this on a radio. It is not lossy: the
+     * link layer retransmits, and a local buffer that is full refuses the write
+     * rather than dropping it — which is precisely the refusal this function
+     * reports.
      *
      * If a stack is ever found that does drop these, switching to
      * WRITE_TYPE_DEFAULT here is the whole fix; nothing above depends on the
@@ -557,11 +582,13 @@ internal class CourierGattClient(
                 }
 
                 // Failed before it was ever usable. Status 133 is Android's
-                // catch-all GATT error and is famously transient — a single
-                // clean retry (close first; reusing the BluetoothGatt does not
-                // work) succeeds often enough to be worth the 600 ms. Retrying
-                // more than once is a policy decision that belongs to whoever
-                // is driving the sync, not to this file.
+                // catch-all GATT error and is widely reported as transient, so
+                // a single clean retry (close first; reusing the BluetoothGatt
+                // is documented not to work) is worth the 600 ms. How often it
+                // actually succeeds is UNMEASURED — that claim comes from other
+                // people's bug reports, not from running this. Retrying more
+                // than once is a policy decision belonging to whoever drives the
+                // sync, not to this file.
                 closeGatt(peer)
                 if (status == 133 && peer.attempts < MAX_CONNECT_ATTEMPTS) {
                     Log.w(TAG, "status 133 connecting to ${peer.peerId}; retrying once")
