@@ -1,0 +1,90 @@
+; Courier record — normative wire format, version 1
+;
+; This file is THE source of truth for the envelope. Per DESIGN.md §0 D-1, the
+; envelope descriptions in the prose sections are illustrative only; where they
+; disagree with this file, this file wins.
+;
+; Per D-24, v1 omits `hlc` and `enc` (present in the draft CDDL). Their integer
+; keys are RESERVED and MUST NOT be reused, so that a v2 record carrying them
+; stays wire-compatible with a v1 parser's "unknown key" handling.
+;
+; Encoding: deterministic CBOR per RFC 8949 §4.2.1, further constrained by
+; spec/canonical-cbor.md. Any encoder that disagrees with that profile will
+; produce a different record-id and is non-conformant.
+
+start = CourierEnvelope
+
+; ---------------------------------------------------------------------------
+; The signed payload.
+;
+; record-id = BLAKE3-256(canonical-cbor(CourierRecord))
+;
+; record-id is the ONLY deduplication key in the system (D-2). Note that `sid`
+; participates in it: two scouts observing the same robot in a low-event match
+; routinely produce byte-identical BODIES, and deduplicating on body hash would
+; silently discard the deliberate double-scouting that scout-reliability
+; estimation depends on for identifiability. Dedup on record-id keeps both.
+; ---------------------------------------------------------------------------
+CourierRecord = {
+  1  => version,        ; format version; = 1 for this document
+  2  => event-key,      ; TBA-style event key, e.g. "2027mose"
+  3  => match-packed,   ; packed comp level / set / match number
+  4  => team,           ; FRC team number being observed
+  5  => scout-pseudonym,; per-event pseudonym, minted at seal time (D-6)
+  6  => schema-id,      ; opaque; identifies the body's shape to its own decoder
+  7  => sealed-at,      ; ms since Unix epoch, as claimed by the sealing device
+  8  => revision,       ; 0 for a first observation; increments on correction
+  9  => body-hash,      ; BLAKE3-256 of `body` as it appears in field 12
+  10 => body-size,      ; length of `body` in bytes
+  11 => supersedes,     ; record-id this record replaces, or null
+  12 => body,           ; OPAQUE. Courier never parses, validates, or logs it.
+}
+
+version         = 1
+event-key       = tstr .size (4..16)
+match-packed    = uint                  ; see spec/canonical-cbor.md "Match packing"
+team            = uint .le 99999
+scout-pseudonym = bstr .size 8
+schema-id       = tstr .size (1..64)
+sealed-at       = uint
+revision        = uint .le 65535
+body-hash       = bstr .size 32
+body-size       = uint .le 65536
+supersedes      = bstr .size 32 / null
+body            = bstr
+
+; ---------------------------------------------------------------------------
+; The envelope: COSE_Sign1 (RFC 9052 §4.2), tagged.
+;
+; The signature covers the WHOLE canonical record, not just the body. Signing
+; only body bytes would leave event-key, match, team, scout-pseudonym and
+; schema-id freely tamperable (D-10).
+; ---------------------------------------------------------------------------
+CourierEnvelope = #6.18([
+  protected   : bstr .cbor ProtectedHeader,
+  unprotected : { },                     ; MUST be empty in v1
+  payload     : bstr .cbor CourierRecord,
+  signature   : bstr .size 64,           ; Ed25519
+])
+
+; NOTE on header labels: the draft annotated label 6 as `iat`. Label 6 in the
+; COSE header registry is `Partial IV` (a bstr); `iat` is claim key 6 in the
+; CWT registry, a different namespace. A `{6: uint}` header both collides with
+; Partial IV's type and means nothing to a COSE implementation. Sealing time
+; lives in the payload as field 7 instead (C-7).
+ProtectedHeader = {
+  1 => -8,               ; alg = EdDSA (RFC 9053)
+  4 => key-id,           ; kid — first 8 bytes of BLAKE3-256(public key)
+}
+key-id = bstr .size 8
+
+; ---------------------------------------------------------------------------
+; Reserved — do not reuse.
+; ---------------------------------------------------------------------------
+; 13 => hlc   ; hybrid logical clock, 16 bytes. Cut in v1 per D-24; the
+;             ; range-digest root (D-3) is the anti-entropy cursor instead.
+; 14 => enc   ; body encryption mode. Cut in v1; v1 confidentiality is none,
+;             ; accepted. When it returns, `body-hash` MUST hash the
+;             ; ciphertext, not the plaintext (D-7) — otherwise the plaintext
+;             ; hash travelling in the clear beside a small-plaintext-space
+;             ; body is a total break of confidentiality.
