@@ -225,6 +225,10 @@ final class CourierPeripheral: NSObject {
         txCharacteristic = tx
         rxCharacteristic = rx
         servicePublication = .adding
+        // Idempotent: this is only reached when nothing of ours is published, so
+        // clearing first makes a second publication after a radio restart safe
+        // rather than a duplicate-UUID add.
+        manager.removeAllServices()
         manager.add(service)
     }
 
@@ -391,13 +395,11 @@ extension CourierPeripheral: CBPeripheralManagerDelegate {
 
         switch peripheral.state {
         case .poweredOn:
-            // Services do not survive the radio going down and coming back
-            // (documented), so republish from scratch and resume advertising if
-            // that is what the app asked for. Without this, turning Bluetooth
-            // off and on mid-event leaves a device silently undiscoverable.
-            if servicePublication == .present || servicePublication == .adding {
-                servicePublication = .absent
-            }
+            // Republish and resume advertising if that is what the app asked
+            // for. Core Bluetooth drops published services when the radio goes
+            // down and does not restore them, so without this, turning Bluetooth
+            // off and on mid-event leaves a device silently undiscoverable —
+            // advertising nothing, with the app showing no error at all.
             beginAdvertisingIfWanted()
 
         default:
@@ -454,8 +456,8 @@ extension CourierPeripheral: CBPeripheralManagerDelegate {
         // read off whichever one is current.
         centrals[peerId] = central
         log.info(
-            "central \(peerId, privacy: .public) subscribed, notification payload "
-                + "\(central.maximumUpdateValueLength, privacy: .public) bytes")
+            "central \(peerId, privacy: .public) subscribed, payload \(central.maximumUpdateValueLength, privacy: .public) bytes"
+        )
     }
 
     func peripheralManager(

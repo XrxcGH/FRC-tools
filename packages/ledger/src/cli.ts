@@ -15,8 +15,13 @@ import { TbaClient } from './tba.ts';
 import { FirstClient } from './first.ts';
 import { reconcileSnapshots, summariseConflicts } from './reconcile.ts';
 import { buildBulkExport } from './bulk.ts';
-import { buildVenuePack, type RatingEntry } from './venue-pack.ts';
+import { buildVenuePack, type MatchEntry, type RatingEntry } from './venue-pack.ts';
 import { SourceError, type SourceId } from './sources.ts';
+import {
+  fitContributions,
+  underDetermined,
+  type AllianceObservation,
+} from '@courier/analytics';
 import type { DeviceKeyPair } from '@courier/core';
 
 export interface LedgerResult {
@@ -172,6 +177,33 @@ export interface PackOptions extends FetchOptions {
   readonly outFile: string;
   /** Ratings, if any are available. Omitted rather than faked when absent. */
   readonly ratings?: readonly RatingEntry[];
+  /**
+   * Fit contributions from the event's own played matches.
+   *
+   * Off by default. Early in an event the fit is dominated by the prior and
+   * says very little, and a pack that quietly contains near-prior numbers looks
+   * exactly like one containing real ones — so asking for them is a deliberate
+   * act, and the output says how thin the data was.
+   */
+  readonly computeRatings?: boolean;
+  /** Below this many alliance appearances a team gets no rating at all. */
+  readonly minAppearances?: number;
+}
+
+/**
+ * Turn played matches into alliance observations for the estimator.
+ *
+ * Unplayed matches contribute nothing — they have no score, and treating a
+ * missing result as a zero would drag every team on that alliance down.
+ */
+export function observationsFrom(matches: readonly MatchEntry[]): AllianceObservation[] {
+  const out: AllianceObservation[] = [];
+  for (const m of matches) {
+    if (m.redScore === undefined || m.blueScore === undefined) continue;
+    if (m.red.length > 0) out.push({ teams: m.red, score: m.redScore });
+    if (m.blue.length > 0) out.push({ teams: m.blue, score: m.blueScore });
+  }
+  return out;
 }
 
 /**
@@ -198,6 +230,52 @@ export async function makeVenuePack(opts: PackOptions): Promise<LedgerResult> {
   );
   const snap = await client.eventSnapshot(opts.eventKey);
 
+  const notes: string[] = [];
+  let ratings: readonly RatingEntry[] = opts.ratings ?? [];
+
+  if (!opts.ratings?.length && opts.computeRatings) {
+    const observations = observationsFrom(snap.matches);
+    if (observations.length === 0) {
+      notes.push(
+        'No matches have been played yet, so there is nothing to fit. The pack carries no',
+        'ratings rather than a column of priors dressed up as measurements.',
+      );
+    } else {
+      const fit = fitContributions(observations);
+      const minAppearances = opts.minAppearances ?? 4;
+      const thin = new Set(underDetermined(fit, minAppearances).map((c) => c.team));
+
+      ratings = fit.contributions
+        .filter((c) => !thin.has(c.team))
+        .map((c) => ({
+          team: c.team,
+          mean: c.mean,
+          sigma: c.sigma,
+          matchesPlayed: c.appearances,
+        }));
+
+      notes.push(
+        `Fitted ${ratings.length} rating(s) from ${observations.length} alliance observation(s).`,
+        `  ridge lambda ${fit.lambda}, effective dof ${fit.effectiveDof.toFixed(1)} of ${fit.teams}`,
+        `  residual sigma ${fit.residualSigma.toFixed(1)} points`,
+      );
+      if (thin.size > 0) {
+        notes.push(
+          `  ${thin.size} team(s) omitted for fewer than ${minAppearances} appearances — an`,
+          '  estimate from two matches formatted like a real one is how a picklist ranks noise',
+        );
+      }
+      if (fit.effectiveDof < fit.teams / 3) {
+        notes.push(
+          '',
+          'WARNING: effective degrees of freedom are low, meaning the fit is still dominated by',
+          'the prior. These numbers separate teams barely more than guessing does. Re-generate',
+          'once more matches have been played.',
+        );
+      }
+    }
+  }
+
   const bytes = buildVenuePack(
     {
       eventKey: opts.eventKey,
@@ -207,7 +285,7 @@ export async function makeVenuePack(opts: PackOptions): Promise<LedgerResult> {
       seasonPackId: opts.seasonPackId,
       teams: snap.teams,
       matches: snap.matches,
-      ratings: opts.ratings ?? [],
+      ratings,
     },
     opts.signer,
   );
@@ -218,12 +296,13 @@ export async function makeVenuePack(opts: PackOptions): Promise<LedgerResult> {
     `  ${snap.teams.length} teams, ${snap.matches.length} matches`,
     `  official results through match ${snap.lastOfficialMatch || '(none yet)'}`,
   ];
-  if (!opts.ratings?.length) {
+  if (notes.length) lines.push('', ...notes);
+  if (ratings.length === 0 && !opts.computeRatings) {
     lines.push(
       '',
-      'No ratings were supplied, so the pack carries none. That is deliberate: a pack with',
-      'fabricated ratings is worse than one with none, because the pit cannot tell which it',
-      'is holding.',
+      'No ratings were supplied and none were computed, so the pack carries none. Pass',
+      '--ratings to fit them from the event\'s own played matches. A pack with fabricated',
+      'ratings is worse than one with none, because the pit cannot tell which it is holding.',
     );
   }
   return ok(lines.join('\n'));

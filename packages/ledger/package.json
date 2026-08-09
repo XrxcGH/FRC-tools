@@ -8,7 +8,8 @@
     ".": "./src/index.ts"
   },
   "dependencies": {
-    "@courier/core": "0.1.0"
+    "@courier/core": "0.1.0",
+    "@courier/analytics": "0.1.0"
   },
   "scripts": {
     "test": "node --test \"test/*.test.ts\""
