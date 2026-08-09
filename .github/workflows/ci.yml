@@ -1,0 +1,90 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  # Weekly, because this project's dependencies are two crypto libraries and its
+  # real risk is bit-rot over a season when nobody is touching it.
+  schedule:
+    - cron: '0 6 * * 1'
+
+jobs:
+  test:
+    name: tests (node ${{ matrix.node }})
+    runs-on: ubuntu-latest
+    strategy:
+      # Every version runs even when one fails: knowing it is "22 only" is more
+      # useful than knowing "something failed".
+      fail-fast: false
+      matrix:
+        # 22.6 is the first release with type stripping behind a flag, and the
+        # README claims support from there. This matrix is what makes that claim
+        # checkable rather than asserted.
+        node: ['22.x', '24.x', 'lts/*']
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+          cache: npm
+      - run: npm ci
+      - run: npm test
+
+  vectors:
+    name: conformance vectors are reproducible
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24.x'
+          cache: npm
+      - run: npm ci
+
+      # The test suite already checks the implementation against the committed
+      # vectors. This checks the other direction: that the committed vectors are
+      # actually what the generator produces, so nobody can hand-edit a vector
+      # to make a failing test pass.
+      - name: regenerate and require no diff
+        run: |
+          npm run vectors
+          if ! git diff --quiet -- spec/vectors/; then
+            echo "::error::Committed vectors differ from what the generator produces."
+            echo "Either a wire-format change landed without regenerating, or a vector"
+            echo "was hand-edited. Both are wire-format changes and need a version bump."
+            git --no-pager diff --stat -- spec/vectors/
+            exit 1
+          fi
+          echo "Vectors are reproducible."
+
+  demo:
+    name: the demo still runs
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24.x'
+          cache: npm
+      - run: npm ci
+
+      # The demo is the only thing exercising every package together, so it
+      # catches integration breaks the per-package tests do not.
+      - name: run the event-day walkthrough
+        run: npm run demo
+
+      - name: the CLI works end to end
+        run: |
+          set -e
+          W="$RUNNER_TEMP/ci"
+          node --experimental-strip-types packages/courier-cli/src/main.ts init 2027mose pit-laptop --dir "$W/laptop"
+          node --experimental-strip-types packages/courier-cli/src/main.ts init 2027mose stands-tablet --dir "$W/tablet"
+          node --experimental-strip-types packages/courier-cli/src/main.ts join-request "$W/req.bin" --dir "$W/tablet"
+          node --experimental-strip-types packages/courier-cli/src/main.ts grant "$W/req.bin" "$W/grant.bin" --dir "$W/laptop"
+          node --experimental-strip-types packages/courier-cli/src/main.ts accept "$W/grant.bin" "$W/req.bin" --dir "$W/tablet"
+          printf 'ada\t1\t8793\t3\nbo\t1\t8793\t4\n' > "$W/scans.txt"
+          node --experimental-strip-types packages/courier-cli/src/main.ts ingest "$W/scans.txt" --dir "$W/tablet"
+          node --experimental-strip-types packages/courier-cli/src/main.ts export "$W/day.courier" --dir "$W/tablet"
+          node --experimental-strip-types packages/courier-cli/src/main.ts import "$W/day.courier" --dir "$W/laptop"
+          node --experimental-strip-types packages/courier-cli/src/main.ts verify --dir "$W/laptop"
