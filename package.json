@@ -12,7 +12,9 @@
     "node": ">=22.6"
   },
   "scripts": {
-    "test": "node --test --test-timeout 60000 \"packages/*/test/*.test.ts\"",
-    "measure": "node packages/courier-core/bench/measure.ts"
+    "test": "node --experimental-strip-types --test --test-timeout 60000 \"packages/*/test/*.test.ts\"",
+    "measure": "node --experimental-strip-types packages/courier-core/bench/measure.ts",
+    "vectors": "node --experimental-strip-types spec/generate-vectors.ts",
+    "demo": "node --experimental-strip-types demo/event-day.ts"
   }
 }

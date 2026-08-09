@@ -22,7 +22,7 @@ Underneath all three: FIRST's API terms prohibit **"any commercial use (i.e. use
 
 ## Code
 
-A working prototype of the Courier layer. Zero build step — Node 22.6+ runs the TypeScript directly.
+A working prototype of the Courier layer. Zero build step — Node runs the TypeScript directly via type stripping. The scripts pass `--experimental-strip-types`, which Node 22.6+ needs and 23.6+ ignores; CI runs the suite on 22.x, 24.x and current LTS, so the supported range is verified rather than claimed.
 
 ```bash
 npm install && npm test
