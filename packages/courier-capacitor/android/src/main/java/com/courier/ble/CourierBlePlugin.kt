@@ -179,7 +179,24 @@ class CourierBlePlugin : Plugin() {
     private enum class Route { SERVER, CLIENT }
 
     private val main = Handler(Looper.getMainLooper())
-    private val peers = PeerRegistry()
+
+    /**
+     * One registry PER ROLE, not one shared between them.
+     *
+     * Sharing looks tidier and is a data-corruption bug. A device connected in
+     * both directions at once — we are its central, it is ours — would get a
+     * single peerId, and then inbound packets from the server role and the
+     * client role would interleave into one PluginGattTransport. Its Reassembler
+     * discards out-of-order packets rather than splicing them, so every
+     * interleaved frame is lost, and the symptom at an event is "the radio is
+     * flaky" rather than anything pointing here.
+     *
+     * Separate registries mean a crossed connection presents as two peers and
+     * two independent links, each with its own ordered stream. That is what the
+     * Swift side does, and it is the behaviour the reassembler assumes.
+     */
+    private val serverPeers = PeerRegistry()
+    private val clientPeers = PeerRegistry()
 
     private var adapter: BluetoothAdapter? = null
     private var server: CourierGattServer? = null
@@ -194,8 +211,8 @@ class CourierBlePlugin : Plugin() {
         val manager = context.getSystemService(Context.BLUETOOTH_SERVICE) as? BluetoothManager
         adapter = manager?.adapter
         adapter?.let {
-            server = CourierGattServer(context, it, peers, events)
-            client = CourierGattClient(context, it, peers, events)
+            server = CourierGattServer(context, it, serverPeers, events)
+            client = CourierGattClient(context, it, clientPeers, events)
         }
         registerAdapterWatcher()
     }
@@ -206,7 +223,8 @@ class CourierBlePlugin : Plugin() {
         // left to hear a disconnect event.
         client?.closeAll(notify = false, reason = null)
         server?.close(notify = false, reason = null)
-        peers.clear()
+        clientPeers.clear()
+        serverPeers.clear()
         super.handleOnDestroy()
     }
 
@@ -697,11 +715,15 @@ class CourierBlePlugin : Plugin() {
     /**
      * Which role reaches this peer.
      *
-     * The peripheral path is preferred when both exist. Both can exist only if
-     * the two devices connected to each other simultaneously, which wastes a
-     * connection but is not incorrect: each direction still travels over
-     * exactly one path, so packet order within a direction is preserved, which
-     * is all the reassembler requires.
+     * Since the two roles keep separate registries, a peerId belongs to exactly
+     * one of them and this lookup is unambiguous. A crossed connection — the two
+     * devices having connected to each other simultaneously — presents as two
+     * peers with two independent links, which wastes a connection and is
+     * otherwise correct: each link carries one ordered stream, which is what the
+     * reassembler requires.
+     *
+     * The `when` still checks both because the caller has only a peerId and does
+     * not know which registry minted it.
      */
     private fun routeFor(peerId: String): Route? = when {
         server?.isReady(peerId) == true -> Route.SERVER
