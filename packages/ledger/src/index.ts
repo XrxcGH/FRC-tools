@@ -63,6 +63,7 @@ export {
   fetchEvent,
   makeVenuePack,
   credentialsFromEnv,
+  observationsFrom,
   nodeFetch,
   type LedgerResult,
   type FetchOptions,

@@ -14,8 +14,9 @@ const USAGE = `ledger — pull an FRC event from the official sources, and write
       write a bulk export: NDJSON, CSV, a manifest, and an attribution file.
       Disagreements between sources are reported, never hidden.
 
-  ledger pack <event-key> --out <file> --key <device.key> [--season-pack <id>]
-      Build a signed venue pack for a pit with no internet.
+  ledger pack <event-key> --out <file> --key <device.key> [--ratings] [--season-pack <id>]
+      Build a signed venue pack for a pit with no internet. --ratings fits team
+      contributions from the event's own played matches, and says how thin the data was.
 
 Credentials, from the environment. Both are free and self-serve:
   TBA_AUTH_KEY                 thebluealliance.com/account
@@ -37,6 +38,8 @@ export async function run(argv: string[]): Promise<LedgerResult> {
   const out = takeOption(args, '--out');
   const keyPath = takeOption(args, '--key');
   const seasonPackId = takeOption(args, '--season-pack') ?? 'unspecified';
+  const computeRatings = args.includes('--ratings');
+  if (computeRatings) args.splice(args.indexOf('--ratings'), 1);
   const command = args.shift();
   const credentials = credentialsFromEnv(process.env);
 
@@ -66,6 +69,7 @@ export async function run(argv: string[]): Promise<LedgerResult> {
         credentials,
         signer,
         seasonPackId,
+        computeRatings,
       });
     }
 

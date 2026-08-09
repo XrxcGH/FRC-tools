@@ -4,6 +4,7 @@ import {
   fetchEvent,
   makeVenuePack,
   credentialsFromEnv,
+  observationsFrom,
   openVenuePack,
   type FetchLike,
   type HttpResponse,
@@ -193,6 +194,47 @@ test('a venue pack is signed, and carries no ratings rather than fake ones', asy
   assert.equal(pack.ratings.length, 0);
   assert.equal(pack.teams.length, 2);
   assert.match(pack.attribution, /The Blue Alliance/);
+});
+
+test('observations come only from played matches', () => {
+  // Treating a missing result as a zero would drag every team on that alliance
+  // down, which is worse than having no observation at all.
+  const obs = observationsFrom([
+    { match: 1, red: [1, 2, 3], blue: [4, 5, 6], redScore: 80, blueScore: 70 },
+    { match: 2, red: [1, 4, 5], blue: [2, 3, 6] }, // unplayed
+    { match: 3, red: [1, 3, 5], blue: [2, 4, 6], redScore: 0, blueScore: 0 }, // real 0-0
+  ]);
+  assert.equal(obs.length, 4, 'two alliances each from the two played matches');
+  assert.ok(obs.some((o) => o.score === 0), 'a genuine shutout is an observation');
+});
+
+test('--ratings on a thin event omits everyone and says why', async () => {
+  // One played match means every team has a single appearance. An estimate from
+  // that, formatted like a real one, is how a picklist ends up ranking noise.
+  const signer = generateDeviceKey('software');
+  const c = collector();
+
+  const r = await makeVenuePack({
+    eventKey: '2027mose',
+    outDir: 'out',
+    outFile: 'out/thin.pack',
+    credentials: { tbaKey: 'k' },
+    fetch: fakeFetch(),
+    now: () => NOW,
+    writeFile: c.write,
+    signer,
+    seasonPackId: 'x@1.0.0',
+    computeRatings: true,
+  });
+
+  assert.equal(r.code, 0);
+  assert.match(r.text, /omitted for fewer than 4 appearances|nothing to fit/);
+
+  const bytes = [...c.files.entries()].find(([p]) => p.endsWith('.pack'))![1];
+  const { pack } = openVenuePack(bytes, (kid) =>
+    toHex(kid) === toHex(signer.kid) ? signer.publicKey : undefined,
+  );
+  assert.equal(pack.ratings.length, 0, 'no ratings rather than unreliable ones');
 });
 
 test('supplied ratings survive into the pack with their uncertainty', async () => {
