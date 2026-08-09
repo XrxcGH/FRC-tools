@@ -1,0 +1,63 @@
+{
+  "note": "record-id = BLAKE3-256(canonical-cbor(record)). Note `twin`: a different scout with a BYTE-IDENTICAL body. Its bodyHash matches the first record and its recordId does not. An implementation that deduplicates on body hash will drop one of them and silently destroy the double-scouting the analytics layer depends on.",
+  "meshKeyHex": "a0a1a2a3a4a5a6a7a8a9aaabacadaeafb0b1b2b3b4b5b6b7b8b9babbbcbdbebf",
+  "cases": [
+    {
+      "name": "first observation",
+      "record": {
+        "version": 1,
+        "eventKey": "2027mose",
+        "match": 16777258,
+        "team": 8793,
+        "scoutHex": "ee3e0843af85194b",
+        "schema": "demo.scout.v1",
+        "sealedAt": 1800000000000,
+        "revision": 0,
+        "bodyHashHex": "f9721f682aa86cb3fa0b1101cdad7ff840a281215d016d17c563ac1a409a5d0d",
+        "bodySize": 37,
+        "supersedesHex": null,
+        "bodyHex": "7b226175746f223a332c2274656c656f70223a31312c22636c696d62223a2264656570227d",
+        "canonicalHex": "ac01010268323032376d6f7365031a0100002a041922590548ee3e0843af85194b066d64656d6f2e73636f75742e7631071b000001a3185c50000800095820f9721f682aa86cb3fa0b1101cdad7ff840a281215d016d17c563ac1a409a5d0d0a18250bf60c58257b226175746f223a332c2274656c656f70223a31312c22636c696d62223a2264656570227d",
+        "recordIdHex": "8a29504b50467ba13279de643bc64f2734608070bb145aef27378be39dea88cc"
+      }
+    },
+    {
+      "name": "correction superseding it",
+      "record": {
+        "version": 1,
+        "eventKey": "2027mose",
+        "match": 16777258,
+        "team": 8793,
+        "scoutHex": "ee3e0843af85194b",
+        "schema": "demo.scout.v1",
+        "sealedAt": 1800000060000,
+        "revision": 1,
+        "bodyHashHex": "c31b785695f84149aa787db684402bdd7e3f8287ea64d5c25ad7ab8ebe8b62c7",
+        "bodySize": 37,
+        "supersedesHex": "8a29504b50467ba13279de643bc64f2734608070bb145aef27378be39dea88cc",
+        "bodyHex": "7b226175746f223a332c2274656c656f70223a31332c22636c696d62223a2264656570227d",
+        "canonicalHex": "ac01010268323032376d6f7365031a0100002a041922590548ee3e0843af85194b066d64656d6f2e73636f75742e7631071b000001a3185d3a600801095820c31b785695f84149aa787db684402bdd7e3f8287ea64d5c25ad7ab8ebe8b62c70a18250b58208a29504b50467ba13279de643bc64f2734608070bb145aef27378be39dea88cc0c58257b226175746f223a332c2274656c656f70223a31332c22636c696d62223a2264656570227d",
+        "recordIdHex": "011cbb6f4b4e7979fff06b3e318f914891954fd2893c7c2778f3dc7ef1c14bdd"
+      }
+    },
+    {
+      "name": "twin: different scout, identical body",
+      "record": {
+        "version": 1,
+        "eventKey": "2027mose",
+        "match": 16777258,
+        "team": 8793,
+        "scoutHex": "92423b2a9b723dab",
+        "schema": "demo.scout.v1",
+        "sealedAt": 1800000000000,
+        "revision": 0,
+        "bodyHashHex": "f9721f682aa86cb3fa0b1101cdad7ff840a281215d016d17c563ac1a409a5d0d",
+        "bodySize": 37,
+        "supersedesHex": null,
+        "bodyHex": "7b226175746f223a332c2274656c656f70223a31312c22636c696d62223a2264656570227d",
+        "canonicalHex": "ac01010268323032376d6f7365031a0100002a04192259054892423b2a9b723dab066d64656d6f2e73636f75742e7631071b000001a3185c50000800095820f9721f682aa86cb3fa0b1101cdad7ff840a281215d016d17c563ac1a409a5d0d0a18250bf60c58257b226175746f223a332c2274656c656f70223a31312c22636c696d62223a2264656570227d",
+        "recordIdHex": "2d58876dc232fdc59d90537ed60ae5cb6609c874eadb3ff3a2cfc60e6ed63193"
+      }
+    }
+  ]
+}

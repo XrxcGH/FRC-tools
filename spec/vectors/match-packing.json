@@ -1,0 +1,59 @@
+{
+  "note": "packed = (level << 24) | (set << 12) | number, with levels qm=1 ef=2 qf=3 sf=4 f=5 and set=0 for qualification. Round-tripping every key back to its original string is a conformance requirement, not an implementation detail.",
+  "cases": [
+    {
+      "key": "2027mose_qm1",
+      "eventKey": "2027mose",
+      "packed": 16777217,
+      "roundTrip": "2027mose_qm1"
+    },
+    {
+      "key": "2027mose_qm42",
+      "eventKey": "2027mose",
+      "packed": 16777258,
+      "roundTrip": "2027mose_qm42"
+    },
+    {
+      "key": "2027mose_qm120",
+      "eventKey": "2027mose",
+      "packed": 16777336,
+      "roundTrip": "2027mose_qm120"
+    },
+    {
+      "key": "2027mose_ef1m1",
+      "eventKey": "2027mose",
+      "packed": 33558529,
+      "roundTrip": "2027mose_ef1m1"
+    },
+    {
+      "key": "2027mose_qf3m2",
+      "eventKey": "2027mose",
+      "packed": 50343938,
+      "roundTrip": "2027mose_qf3m2"
+    },
+    {
+      "key": "2027mose_sf1m2",
+      "eventKey": "2027mose",
+      "packed": 67112962,
+      "roundTrip": "2027mose_sf1m2"
+    },
+    {
+      "key": "2027mose_sf13m1",
+      "eventKey": "2027mose",
+      "packed": 67162113,
+      "roundTrip": "2027mose_sf13m1"
+    },
+    {
+      "key": "2027mose_f1m1",
+      "eventKey": "2027mose",
+      "packed": 83890177,
+      "roundTrip": "2027mose_f1m1"
+    },
+    {
+      "key": "2027mose_f1m3",
+      "eventKey": "2027mose",
+      "packed": 83890179,
+      "roundTrip": "2027mose_f1m3"
+    }
+  ]
+}

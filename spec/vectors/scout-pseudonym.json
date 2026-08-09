@@ -1,0 +1,36 @@
+{
+  "note": "sid_event = BLAKE3(len32be(scoutId) ‖ len32be(eventKey) ‖ len32be(meshKey))[0..8]. Each part is length-prefixed so that (\"ab\",\"c\") and (\"a\",\"bc\") cannot collide. The same human at two events MUST produce different values — that is the unlinkability property.",
+  "meshKeyHex": "a0a1a2a3a4a5a6a7a8a9aaabacadaeafb0b1b2b3b4b5b6b7b8b9babbbcbdbebf",
+  "cases": [
+    {
+      "scout": "ada",
+      "eventKey": "2027mose",
+      "pseudonymHex": "ee3e0843af85194b"
+    },
+    {
+      "scout": "ada",
+      "eventKey": "2027wamo",
+      "pseudonymHex": "dac98986418c7c67"
+    },
+    {
+      "scout": "bo",
+      "eventKey": "2027mose",
+      "pseudonymHex": "92423b2a9b723dab"
+    },
+    {
+      "scout": "ab",
+      "eventKey": "c027mose",
+      "pseudonymHex": "437ed36f110b53bb"
+    },
+    {
+      "scout": "a",
+      "eventKey": "bc027mose",
+      "pseudonymHex": "9416cc3b2c1bd24c"
+    },
+    {
+      "scout": "",
+      "eventKey": "2027mose",
+      "pseudonymHex": "4e7dee4bde865dcb"
+    }
+  ]
+}
