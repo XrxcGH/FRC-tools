@@ -1,0 +1,16 @@
+{
+  "name": "@courier/analytics",
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Team contribution estimates with uncertainty, from alliance scores",
+  "license": "Apache-2.0",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "dependencies": {
+    "@courier/core": "0.1.0"
+  },
+  "scripts": {
+    "test": "node --experimental-strip-types --test \"test/*.test.ts\""
+  }
+}
