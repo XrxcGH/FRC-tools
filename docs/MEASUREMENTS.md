@@ -69,7 +69,43 @@ Two separate effects are visible here, and they should not be confused.
 
 On this machine a peer can verify a full event day (640 records) in 1.1 s. A 2016-class Chromebook or a low-end Android tablet should be assumed several times slower — see the open items below, because that factor has not been measured on real hardware.
 
-## 5. Not measured here — these cells stay empty on purpose
+## 5. Drift detector operating point
+
+Reproduce with `npm run measure:cusum`. 20,000 trials per cell, fixed-seed PRNG.
+48 paired observations per scout — one two-day event — with the drift beginning
+halfway through. "Detect" counts only alarms that fire at or after the drift
+starts; an earlier one is a false accusation, not a detection.
+
+| k | h | false alarm | detect 1.0σ | detect 1.5σ | detect 2.0σ |
+|---:|---:|---:|---:|---:|---:|
+| 0.50 | 4 | 23.3% | 88.1% in 5 | 88.8% in 3 | 88.5% in 2 |
+| 0.50 | 5 | 8.8% | 94.0% in 7 | 96.3% in 4 | 96.4% in 3 |
+| **0.75** | **5** | **1.0%** | **81.2% in 11** | **99.5% in 5** | **99.6% in 3** |
+| 1.00 | 4 | 0.6% | 59.6% in 11 | 98.7% in 6 | 99.7% in 3 |
+| 1.00 | 5 | 0.1% | 43.3% in 14 | 97.6% in 8 | 100.0% in 4 |
+
+Chance that **at least one** scout on a clean team is falsely accused, in one event:
+
+| k | h | 4 scouts | 6 scouts | 8 scouts |
+|---:|---:|---:|---:|---:|
+| 0.50 | 4 | 67.2% | 81.2% | 89.2% |
+| 0.50 | 5 | 30.9% | 42.5% | 52.2% |
+| **0.75** | **5** | **4.0%** | **5.9%** | **7.8%** |
+| 1.00 | 4 | 2.8% | 4.1% | 5.4% |
+| 1.00 | 5 | 0.3% | 0.5% | 0.6% |
+
+The design specified the textbook 0.5 / 4 pairing. The second table is why it is
+not shipped: it accuses somebody innocent at four events out of five on a
+six-scout team, and a drift table that is usually wrong stops being read — which
+costs more real drifts than a stricter detector misses. D-28 records the change.
+
+What this does **not** establish: the shift sizes are in units of the pool's own
+disagreement spread, and no real scouting data was available to check that a
+disengaged scout actually drifts by 1σ rather than 0.4σ. The false-alarm column
+is a property of the detector and holds regardless; the detection columns are
+conditional on that assumption.
+
+## 6. Not measured here — these cells stay empty on purpose
 
 | Open question | Why this harness cannot answer it | Blocks |
 |---|---|---|
