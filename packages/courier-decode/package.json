@@ -1,0 +1,19 @@
+{
+  "name": "@courier/decode",
+  "version": "0.1.0",
+  "type": "module",
+  "description": "The decoder seam — turning a team's own opaque bodies into values, on their own device",
+  "license": "Apache-2.0",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "dependencies": {
+    "@courier/core": "0.1.0"
+  },
+  "scripts": {
+    "test": "node --test \"test/*.test.ts\""
+  },
+  "devDependencies": {
+    "@courier/analytics": "0.1.0"
+  }
+}
