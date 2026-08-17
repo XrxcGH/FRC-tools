@@ -61,3 +61,26 @@ export {
   type ScoutQuality,
   type CusumState,
 } from './blend.ts';
+
+export {
+  spearman,
+  kendallTau,
+  rankValues,
+  ndcg,
+  captainRegret,
+  brierScore,
+  logLoss,
+  accuracy,
+  evaluate,
+  formatEvaluations,
+  BenchmarkError,
+  DEFAULT_LABEL,
+  MIN_TEAMS_FOR_STABLE_RANKING,
+  type RankedTeam,
+  type TruthEntry,
+  type Prediction,
+  type RegretOptions,
+  type RegretResult,
+  type EvaluationInput,
+  type Evaluation,
+} from './benchmark.ts';
