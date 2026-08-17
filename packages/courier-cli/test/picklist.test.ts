@@ -12,6 +12,7 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { supersede, sealRecord, utf8 } from '@courier/core';
 import { Workspace, run, loadProfilesForTest } from './helpers.ts';
 import * as cmd from '../src/commands.ts';
 
@@ -427,6 +428,47 @@ test('the same store and arguments produce the same board twice', async () => {
     const a = await pick(wsDir, '--schema', schemaPath, '--field', 'teleop', '--alliance', '8793', '--picks-between', '4');
     const b = await pick(wsDir, '--schema', schemaPath, '--field', 'teleop', '--alliance', '8793', '--picks-between', '4');
     assert.equal(a.text, b.text);
+  } finally {
+    s.cleanup();
+  }
+});
+
+/* ------------------------------------------------------- corrected records */
+
+test('a corrected observation counts once, at the corrected value', async () => {
+  const s = scratch();
+  try {
+    const { wsDir, schemaPath } = fixture(s.dir);
+    const ws = new Workspace(wsDir);
+
+    // Team 254's five matches all sit near 15. Add a sixth at a slipped
+    // keystroke — 150 — then correct it to 15 the way a scout actually would,
+    // with an append-only supersede. The original stays in the log forever
+    // because peers that have not seen the fix still reconcile against it.
+    const extra = join(s.dir, 'slip.txt');
+    writeFileSync(extra, tsv('s1', 6, 254, 4, 150, 'park'));
+    assert.equal(cmd.ingest(ws, extra, PROFILES).code, 0);
+
+    const store = ws.store();
+    // Found by body rather than by match number: `record.match` is the PACKED
+    // form (level, set, number), not the 6 that went in on the QR.
+    const wrong = store
+      .currentRecords()
+      .find((x) => x.record.team === 254 && new TextDecoder().decode(x.record.body).includes('150'))!;
+    const fixed = supersede(wrong.record, utf8(tsv('s1', 6, 254, 4, 15, 'park')));
+    const admitted = store.admit(sealRecord(fixed, ws.device()), ws.registry().resolver());
+    assert.equal(admitted.status, 'admitted', admitted.reason);
+    ws.writeStore(store);
+
+    const r = await pick(wsDir, '--schema', schemaPath, '--field', 'teleop', '--alliance', '8793');
+    assert.equal(r.code, 0, r.text);
+    assert.match(r.text, /1 superseded revision\(s\) excluded/);
+
+    // The mean of six 15s is 15. The mean including the slip is 37.5, which
+    // would put 254 near the top of a board it does not belong on.
+    const rows = [...r.text.matchAll(/^\s*(\d+)\s+(\d+)\s/gm)].map((m) => Number(m[2]));
+    assert.ok(rows.indexOf(254) > rows.indexOf(1114), `254 ranked at ${rows.indexOf(254)}: ${rows}`);
+    assert.ok(rows.indexOf(254) > rows.indexOf(118), 'the slip is still being counted');
   } finally {
     s.cleanup();
   }

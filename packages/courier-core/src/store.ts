@@ -167,6 +167,43 @@ export class RecordStore {
     return [...byScout.values()];
   }
 
+  /**
+   * The current view of the whole store: one record per scout per observation,
+   * superseded revisions removed.
+   *
+   * This, not `sortedIds`, is what analysis should read. `sortedIds` is the
+   * SYNC view — every record ever admitted, because the log is append-only and
+   * a peer that has not seen a correction still needs the original to reconcile
+   * against. Feeding that set to an average counts a scout who fixed a typo
+   * twice, at both the wrong value and the right one, and the mistake is
+   * invisible because both numbers are individually plausible.
+   *
+   * Ordering is by observation and then by the same record comparison the rest
+   * of the store uses, so two devices holding the same records produce the same
+   * sequence.
+   */
+  currentRecords(): StoredRecord[] {
+    const out: StoredRecord[] = [];
+    for (const key of [...this.#byObservation.keys()].sort()) {
+      const bucket = this.#byObservation.get(key)!;
+      const first = bucket[0];
+      if (!first) continue;
+      const current = this.currentForObservation(
+        first.record.eventKey,
+        first.record.match,
+        first.record.team,
+      );
+      current.sort((a, b) => compareRecords(a.record, b.record));
+      out.push(...current);
+    }
+    return out;
+  }
+
+  /** How many records `currentRecords` leaves out as superseded. */
+  supersededCount(): number {
+    return this.#byId.size - this.currentRecords().length;
+  }
+
   stats(): StoreStats {
     const obs = new Set<string>();
     const scouts = new Set<string>();
