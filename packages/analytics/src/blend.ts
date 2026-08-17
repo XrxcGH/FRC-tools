@@ -1,0 +1,351 @@
+/**
+ * Blending scout observations with the official alliance total.
+ *
+ * The design calls this "the piece nobody ships", and the research found five
+ * teams who hand-rolled the arithmetic and none who packaged it. The problem is
+ * concrete: FMS publishes an alliance total and nothing per robot, while scouts
+ * produce per-robot counts that are noisy and sometimes plain wrong. Neither
+ * source alone answers "how much did team 8793 contribute".
+ *
+ * The move is to treat the official total as a HARD LINEAR CONSTRAINT on the
+ * per-robot estimates rather than as another noisy observation. Three scouts'
+ * counts get forced to sum to what actually happened, and the correction is
+ * distributed in proportion to how uncertain each robot's estimate was — a
+ * confident estimate barely moves, a shaky one absorbs most of the discrepancy.
+ *
+ * ── Why the maths stays small ───────────────────────────────────────────────
+ * The prior is diagonal (robots are a priori independent) and each scout
+ * observation touches exactly one robot, so the posterior after the scout
+ * update is still diagonal. That makes the whole update a handful of scalar
+ * operations rather than a matrix solve, for an alliance of three. The
+ * constraint step does introduce correlation — that is what a constraint IS —
+ * but the marginal variances, which is all a picklist consumes, stay closed
+ * form.
+ */
+
+export class BlendError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'BlendError';
+  }
+}
+
+export interface ScoutObservation {
+  /** Index of the robot within this alliance, 0-based. */
+  readonly robot: number;
+  readonly value: number;
+  /** Opaque scout pseudonym. Never a name. */
+  readonly scout: string;
+  /**
+   * Observation precision, 1/σ². Higher means more trusted.
+   *
+   * Defaults to 1. Supply per-scout values from `scoutReliability` once enough
+   * double-scouted matches exist to estimate them.
+   */
+  readonly precision?: number;
+  /** Additive bias correction for this scout, subtracted before the update. */
+  readonly bias?: number;
+}
+
+export interface BlendInput {
+  /** Prior mean per robot, in this field's units. */
+  readonly priorMean: readonly number[];
+  /** Prior variance per robot. Must be positive. */
+  readonly priorVariance: readonly number[];
+  readonly observations: readonly ScoutObservation[];
+  /**
+   * The official alliance total, when it is known.
+   *
+   * Omit it and this degrades to a plain Bayesian update from the scouts —
+   * which is exactly what happens in a pit with no uplink, where today's
+   * results cannot reach the device (D-5). The result says so.
+   */
+  readonly officialTotal?: number;
+  /**
+   * Variance on the official total. 0 for an alliance-level FMS figure, which
+   * is exact.
+   *
+   * Use a LARGE value for station-keyed fields such as leave, climb and park:
+   * those are documented as sometimes wrong, so they are a noisy measurement
+   * rather than a constraint.
+   */
+  readonly officialVariance?: number;
+}
+
+export interface BlendResult {
+  readonly mean: number[];
+  /** Marginal variance per robot. Not a covariance — the constraint correlates them. */
+  readonly variance: number[];
+  /** True when the official total was applied. */
+  readonly constrained: boolean;
+  /** Robots with at least one scout observation. */
+  readonly observedRobots: number;
+  /**
+   * False when the estimate cannot really separate the robots — one scout
+   * covering an alliance, or robots with no observation at all. The numbers are
+   * still the best available, but they are mostly prior plus an even share of
+   * the constraint, and a UI must not present them as measurements.
+   */
+  readonly identifiable: boolean;
+  readonly notes: string[];
+}
+
+const DEFAULT_PRECISION = 1;
+
+/**
+ * Posterior per-robot contributions.
+ *
+ * Step 1 is an ordinary Gaussian update from the scouts, in information form so
+ * that multiple observations of one robot compose by addition. Step 2 conditions
+ * on the alliance total.
+ */
+export function blendWithOfficial(input: BlendInput): BlendResult {
+  const n = input.priorMean.length;
+  if (n === 0) throw new BlendError('an alliance needs at least one robot');
+  if (input.priorVariance.length !== n) {
+    throw new BlendError(
+      `priorMean has ${n} entries but priorVariance has ${input.priorVariance.length}`,
+    );
+  }
+  for (const v of input.priorVariance) {
+    if (!(v > 0) || !Number.isFinite(v)) {
+      throw new BlendError('every prior variance must be finite and positive');
+    }
+  }
+  for (const m of input.priorMean) {
+    if (!Number.isFinite(m)) throw new BlendError('prior means must be finite');
+  }
+
+  // --- 1. scout update, in information form -------------------------------
+  // Λ_ii = 1/σ0_i² + Σ precision   and   η_i = μ0_i/σ0_i² + Σ precision·(y − bias)
+  const lambda = input.priorVariance.map((v) => 1 / v);
+  const eta = input.priorMean.map((m, i) => m * lambda[i]!);
+  const seen = new Array<number>(n).fill(0);
+  const scouts = new Set<string>();
+
+  for (const o of input.observations) {
+    if (!Number.isInteger(o.robot) || o.robot < 0 || o.robot >= n) {
+      throw new BlendError(`observation names robot ${o.robot}, outside 0..${n - 1}`);
+    }
+    if (!Number.isFinite(o.value)) throw new BlendError('observation values must be finite');
+    const p = o.precision ?? DEFAULT_PRECISION;
+    if (!(p > 0) || !Number.isFinite(p)) {
+      throw new BlendError('observation precision must be finite and positive');
+    }
+    lambda[o.robot] += p;
+    eta[o.robot] += p * (o.value - (o.bias ?? 0));
+    seen[o.robot]!++;
+    scouts.add(o.scout);
+  }
+
+  let mean = eta.map((e, i) => e / lambda[i]!);
+  let variance = lambda.map((l) => 1 / l);
+
+  const observedRobots = seen.filter((c) => c > 0).length;
+  const notes: string[] = [];
+
+  // --- 2. condition on the official total ---------------------------------
+  const constrained = input.officialTotal !== undefined;
+  if (constrained) {
+    const total = input.officialTotal!;
+    if (!Number.isFinite(total)) throw new BlendError('the official total must be finite');
+    const r = input.officialVariance ?? 0;
+    if (r < 0 || !Number.isFinite(r)) {
+      throw new BlendError('officialVariance must be finite and non-negative');
+    }
+
+    // A = [1 … 1], so AΣAᵀ is just the sum of the marginal variances.
+    const s = variance.reduce((a, b) => a + b, 0) + r;
+    if (!(s > 0)) {
+      throw new BlendError('degenerate constraint: zero total variance');
+    }
+    const residual = total - mean.reduce((a, b) => a + b, 0);
+
+    // Kalman gain per robot: how much of the discrepancy this robot absorbs.
+    // Proportional to its own uncertainty, which is the whole point — a robot
+    // three scouts agreed on barely moves.
+    const gain = variance.map((v) => v / s);
+    mean = mean.map((m, i) => m + gain[i]! * residual);
+    // Σ* = Σ − ΣAᵀ(AΣAᵀ+R)⁻¹AΣ. Diagonal entries only; the constraint does
+    // introduce off-diagonal correlation, which a picklist does not consume.
+    variance = variance.map((v, i) => Math.max(0, v - gain[i]! * v));
+
+    if (r === 0) {
+      notes.push(
+        'The per-robot estimates are forced to sum to the official alliance total exactly.',
+      );
+    } else {
+      notes.push(
+        'The official total was treated as a noisy measurement rather than an exact ' +
+          'constraint, which is correct for station-keyed fields (leave, climb, park) that ' +
+          'FMS is documented to get wrong.',
+      );
+    }
+  } else {
+    notes.push(
+      'No official total was available, so these are scout estimates alone and are NOT ' +
+        'reconciled against what actually happened. This is the normal state in a pit with no ' +
+        'uplink until someone carries results in.',
+    );
+  }
+
+  // --- 3. say plainly when this cannot separate the robots -----------------
+  const identifiable = observedRobots === n && scouts.size > 1;
+  if (observedRobots < n) {
+    notes.push(
+      `${n - observedRobots} of ${n} robots had no scout observation. Their values come from ` +
+        'the prior plus a share of the constraint, not from anyone watching them.',
+    );
+  }
+  if (scouts.size === 1 && n > 1) {
+    // Small teams routinely run one or two scouts across six robots. The
+    // constraint is still valid; the per-robot split is close to unidentifiable.
+    notes.push(
+      'Every observation came from one scout, so a systematic bias by that scout cannot be ' +
+        'distinguished from the robots genuinely differing. Treat the split as indicative.',
+    );
+  }
+
+  return { mean, variance, constrained, observedRobots, identifiable, notes };
+}
+
+/* -------------------------------------------------------------------------- */
+/* Scout reliability                                                          */
+/* -------------------------------------------------------------------------- */
+
+export interface ScoutResidual {
+  readonly scout: string;
+  /** Observed minus the blended posterior for the same robot and match. */
+  readonly residual: number;
+}
+
+export interface ScoutQuality {
+  readonly scout: string;
+  readonly observations: number;
+  /** Systematic over- or under-count. Subtract it before the next update. */
+  readonly bias: number;
+  /** 1/σ², for use as an observation precision. */
+  readonly precision: number;
+  /**
+   * False until there are enough observations for the estimate to mean
+   * anything. A scout with three matches gets essentially the pool average, and
+   * the flag says so rather than dressing it up.
+   */
+  readonly reliable: boolean;
+}
+
+/** Below this many observations a scout's own statistics are mostly noise. */
+export const MIN_OBSERVATIONS_FOR_RELIABILITY = 8;
+
+/**
+ * Per-scout bias and precision, shrunk toward the pool.
+ *
+ * Partial pooling rather than per-scout maximum likelihood: a scout with three
+ * matches would otherwise get a precision estimated from three numbers, which is
+ * worse than assuming they are average. The shrinkage weight is
+ * n/(n+k) with k the minimum-observations constant, so a scout converges to
+ * their own statistics as evidence accumulates.
+ */
+export function scoutReliability(residuals: readonly ScoutResidual[]): ScoutQuality[] {
+  const byScout = new Map<string, number[]>();
+  for (const r of residuals) {
+    if (!Number.isFinite(r.residual)) continue;
+    const list = byScout.get(r.scout) ?? [];
+    list.push(r.residual);
+    byScout.set(r.scout, list);
+  }
+  if (byScout.size === 0) return [];
+
+  const all = [...byScout.values()].flat();
+  const poolBias = mean(all);
+  const poolVariance = Math.max(variance(all, poolBias), 1e-9);
+
+  const k = MIN_OBSERVATIONS_FOR_RELIABILITY;
+  const out: ScoutQuality[] = [];
+
+  for (const [scout, xs] of byScout) {
+    const n = xs.length;
+    const w = n / (n + k);
+    const ownBias = mean(xs);
+    const ownVariance = n > 1 ? Math.max(variance(xs, ownBias), 1e-9) : poolVariance;
+
+    const bias = w * ownBias + (1 - w) * poolBias;
+    const v = w * ownVariance + (1 - w) * poolVariance;
+
+    out.push({
+      scout,
+      observations: n,
+      bias,
+      precision: 1 / v,
+      reliable: n >= k,
+    });
+  }
+  return out.sort((a, b) => b.precision - a.precision);
+}
+
+function mean(xs: readonly number[]): number {
+  return xs.reduce((a, b) => a + b, 0) / xs.length;
+}
+
+function variance(xs: readonly number[], m: number): number {
+  if (xs.length < 2) return 0;
+  return xs.reduce((a, x) => a + (x - m) ** 2, 0) / (xs.length - 1);
+}
+
+/* -------------------------------------------------------------------------- */
+/* Drifting scouts                                                            */
+/* -------------------------------------------------------------------------- */
+
+export interface CusumState {
+  /** Accumulated evidence of over-reporting. */
+  readonly high: number;
+  /** Accumulated evidence of under-reporting. */
+  readonly low: number;
+  readonly alarm: boolean;
+  /** Observations since the last alarm or reset. */
+  readonly since: number;
+}
+
+export const CUSUM_SLACK = 0.5;
+export const CUSUM_THRESHOLD = 4;
+
+/**
+ * CUSUM on the standardised residual — the detector that actually catches a
+ * scout losing attention.
+ *
+ * A scout who stops watching does not go silent. They keep submitting, and the
+ * numbers drift systematically low. A per-match outlier test never fires on that
+ * because no single match is extreme; the drift only shows up cumulatively.
+ *
+ * Slack of 0.5σ and a threshold of 4σ alarm after roughly four to six
+ * consecutive one-sigma-biased matches — fast enough to re-task someone during
+ * an event, slow enough not to fire on one bad match. Those constants are the
+ * standard textbook pairing and have NOT been tuned against real scouting data,
+ * because none was available here.
+ */
+export function cusumUpdate(
+  previous: CusumState | null,
+  standardisedResidual: number,
+): CusumState {
+  const prev = previous ?? { high: 0, low: 0, alarm: false, since: 0 };
+  if (!Number.isFinite(standardisedResidual)) return prev;
+
+  const high = Math.max(0, prev.high + standardisedResidual - CUSUM_SLACK);
+  const low = Math.max(0, prev.low - standardisedResidual - CUSUM_SLACK);
+  const alarm = high > CUSUM_THRESHOLD || low > CUSUM_THRESHOLD;
+
+  // Reset on alarm so the next drift is detected from scratch rather than
+  // latching forever after one bad stretch.
+  if (alarm) return { high: 0, low: 0, alarm: true, since: 0 };
+  return { high, low, alarm: false, since: prev.since + 1 };
+}
+
+/** Direction of a drift, for a message an operator can act on. */
+export function describeDrift(state: CusumState, lastResidual: number): string {
+  if (!state.alarm) return '';
+  return lastResidual < 0
+    ? 'This scout has been under-counting for several matches. Check they are still watching ' +
+        'the right robot.'
+    : 'This scout has been over-counting for several matches. Check they are not double-' +
+        'counting shared game pieces.';
+}
