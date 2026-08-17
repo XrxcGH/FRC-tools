@@ -6,6 +6,7 @@
 import { readFileSync } from 'node:fs';
 import { deviceKeyFromSecret } from '@courier/core';
 import { fetchEvent, makeVenuePack, credentialsFromEnv, type LedgerResult } from './cli.ts';
+import { picklistFromPack, parseTeamList } from './pick.ts';
 
 const USAGE = `ledger — pull an FRC event from the official sources, and write files
 
@@ -17,6 +18,10 @@ const USAGE = `ledger — pull an FRC event from the official sources, and write
   ledger pack <event-key> --out <file> --key <device.key> [--ratings] [--season-pack <id>]
       Build a signed venue pack for a pit with no internet. --ratings fits team
       contributions from the event's own played matches, and says how thin the data was.
+
+  ledger picklist <pack> --key <device.key> --alliance <teams> [--picks-between N]
+      Rank the board from a signed venue pack. Runs entirely offline — the pack
+      has everything, which is the reason the pack exists. Needs no credentials.
 
 Credentials, from the environment. Both are free and self-serve:
   TBA_AUTH_KEY                 thebluealliance.com/account
@@ -38,6 +43,9 @@ export async function run(argv: string[]): Promise<LedgerResult> {
   const out = takeOption(args, '--out');
   const keyPath = takeOption(args, '--key');
   const seasonPackId = takeOption(args, '--season-pack') ?? 'unspecified';
+  const alliance = takeOption(args, '--alliance');
+  const exclude = takeOption(args, '--exclude');
+  const picksBetween = takeOption(args, '--picks-between');
   const computeRatings = args.includes('--ratings');
   if (computeRatings) args.splice(args.indexOf('--ratings'), 1);
   const command = args.shift();
@@ -71,6 +79,37 @@ export async function run(argv: string[]): Promise<LedgerResult> {
         seasonPackId,
         computeRatings,
       });
+    }
+
+    case 'picklist': {
+      const packPath = args[0];
+      if (!packPath || !keyPath || !alliance) {
+        return {
+          text:
+            'usage: ledger picklist <pack> --key <device.key> --alliance <teams>\n\n' +
+            'The key is the one that SIGNED the pack. An unverified pack is exactly the\n' +
+            'fabricated-ratings problem: from in here it looks identical to a real one.',
+          code: 1,
+        };
+      }
+      try {
+        const between = picksBetween ? Number(picksBetween) : 0;
+        if (!Number.isInteger(between) || between < 0) {
+          return { text: '--picks-between must be a non-negative whole number', code: 1 };
+        }
+        return picklistFromPack({
+          packPath,
+          keyPath,
+          alliance: parseTeamList(alliance),
+          exclude: parseTeamList(exclude),
+          picksBetween: between,
+          // A captain with a pick still to come after this one wants the board
+          // evaluated two deep, not one.
+          haveSecondPick: between > 0,
+        });
+      } catch (err) {
+        return { text: (err as Error).message, code: 1 };
+      }
     }
 
     default:
