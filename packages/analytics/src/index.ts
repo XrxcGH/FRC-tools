@@ -29,3 +29,35 @@ export {
   LinalgError,
   type Matrix,
 } from './linalg.ts';
+
+export {
+  allianceScore,
+  rankPicklist,
+  contingencies,
+  formatPicklist,
+  seededRng,
+  PicklistError,
+  type TeamEstimate,
+  type ContentionModel,
+  type PicklistOptions,
+  type PicklistEntry,
+  type Contingency,
+  type Rng,
+} from './picklist.ts';
+
+export {
+  blendWithOfficial,
+  scoutReliability,
+  cusumUpdate,
+  describeDrift,
+  BlendError,
+  MIN_OBSERVATIONS_FOR_RELIABILITY,
+  CUSUM_SLACK,
+  CUSUM_THRESHOLD,
+  type ScoutObservation,
+  type BlendInput,
+  type BlendResult,
+  type ScoutResidual,
+  type ScoutQuality,
+  type CusumState,
+} from './blend.ts';
