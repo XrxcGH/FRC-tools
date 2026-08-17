@@ -21,3 +21,5 @@ export {
 } from './commands.ts';
 
 export { run } from './main.ts';
+
+export { picklist, type PicklistArgs } from './picklist.ts';

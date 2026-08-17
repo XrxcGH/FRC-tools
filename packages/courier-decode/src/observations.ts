@@ -138,3 +138,95 @@ export const BridgeSchemas: Readonly<Record<string, BodySchema>> = {
     ],
   },
 } as const;
+
+/* -------------------------------------------------------------------------- */
+/* Per-team estimates straight from scouting                                  */
+/* -------------------------------------------------------------------------- */
+
+export interface TeamEstimateLike {
+  readonly team: number;
+  readonly mean: number;
+  readonly sigma: number;
+  readonly observations: number;
+}
+
+export interface TeamEstimateOptions {
+  /** Below this many observations a team is omitted rather than estimated. */
+  readonly minObservations?: number;
+}
+
+export const DEFAULT_MIN_OBSERVATIONS = 3;
+
+export interface TeamEstimateResult {
+  readonly estimates: TeamEstimateLike[];
+  /** Teams seen but omitted for too few observations, with their counts. */
+  readonly thin: Array<{ team: number; observations: number }>;
+}
+
+/**
+ * Mean and uncertainty per team, directly from scouting.
+ *
+ * No least squares here, and that is the point rather than a shortcut. OPR and
+ * its relatives exist because the OFFICIAL record is alliance-level: you can
+ * only see three robots' combined output and have to solve for the parts.
+ * Scouting data is already per-robot, so the deconvolution is unnecessary — and
+ * a mean is both more accurate and vastly more explainable to the student who
+ * has to defend the picklist in a meeting.
+ *
+ * Sigma is the standard error of the mean, shrunk toward the pool spread when a
+ * team has few observations. Without shrinkage, a team scouted three times who
+ * happened to score the same number each time would report sigma ≈ 0 and sail
+ * to the top of a floor-sorted list on the strength of a coincidence.
+ */
+export function teamEstimatesFrom(
+  records: readonly DecodedRecord[],
+  field: string,
+  opts: TeamEstimateOptions = {},
+): TeamEstimateResult {
+  const minObs = opts.minObservations ?? DEFAULT_MIN_OBSERVATIONS;
+  const byTeam = new Map<number, number[]>();
+
+  for (const r of records) {
+    const v = r.values[field];
+    const n = typeof v === 'boolean' ? (v ? 1 : 0) : typeof v === 'number' ? v : undefined;
+    if (n === undefined) continue;
+    const list = byTeam.get(r.team) ?? [];
+    list.push(n);
+    byTeam.set(r.team, list);
+  }
+
+  const all = [...byTeam.values()].flat();
+  const poolSd = all.length > 1 ? Math.sqrt(sampleVariance(all)) : 1;
+
+  const estimates: TeamEstimateLike[] = [];
+  const thin: Array<{ team: number; observations: number }> = [];
+
+  for (const [team, xs] of byTeam) {
+    if (xs.length < minObs) {
+      thin.push({ team, observations: xs.length });
+      continue;
+    }
+    const n = xs.length;
+    const mean = xs.reduce((a, b) => a + b, 0) / n;
+    const ownSd = Math.sqrt(sampleVariance(xs));
+    // Partial pooling on the spread, weight n/(n+k) with k = minObs.
+    const w = n / (n + minObs);
+    const sd = w * ownSd + (1 - w) * poolSd;
+    estimates.push({
+      team,
+      mean,
+      sigma: Math.max(sd / Math.sqrt(n), 1e-6),
+      observations: n,
+    });
+  }
+
+  estimates.sort((a, b) => b.mean - a.mean);
+  thin.sort((a, b) => a.team - b.team);
+  return { estimates, thin };
+}
+
+function sampleVariance(xs: readonly number[]): number {
+  if (xs.length < 2) return 0;
+  const m = xs.reduce((a, b) => a + b, 0) / xs.length;
+  return xs.reduce((a, x) => a + (x - m) ** 2, 0) / (xs.length - 1);
+}

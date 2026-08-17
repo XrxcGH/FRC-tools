@@ -35,4 +35,9 @@ export {
   toAllianceObservations,
   toScoutObservations,
   BridgeSchemas,
+  teamEstimatesFrom,
+  DEFAULT_MIN_OBSERVATIONS,
+  type TeamEstimateLike,
+  type TeamEstimateOptions,
+  type TeamEstimateResult,
 } from './observations.ts';
