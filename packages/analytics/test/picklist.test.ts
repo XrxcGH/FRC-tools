@@ -299,8 +299,12 @@ test('the printed form is readable off paper under time pressure', () => {
   });
   const text = formatPicklist(ranked, 3);
 
-  assert.match(text, /team\s+value\s+floor\s+ceiling\s+risk/);
+  assert.match(text, /#\s+team\s+total\s+floor\s+ceiling\s+risk/);
   assert.equal(text.split('\n').filter((l) => /^\s+\d+\s+\d+/.test(l)).length, 3);
   assert.match(text, /floor = 20th percentile/, 'the column is explained, not assumed');
   assert.match(text, /risk = chance this team is gone/);
+  // The two column groups are on different scales; the header must separate them.
+  assert.match(text, /this team alone/);
+  assert.match(text, /alliance total = your alliance WITH this pick/);
+  assert.match(text, /THIS TEAM alone, not the total/);
 });

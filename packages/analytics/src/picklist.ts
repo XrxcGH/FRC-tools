@@ -332,19 +332,33 @@ export function contingencies(
   return out;
 }
 
-/** A picklist as printable text, because it is read off paper in the stands. */
+/**
+ * A picklist as printable text, because it is read off paper in the stands.
+ *
+ * The two number groups are on DIFFERENT SCALES and the header has to say so.
+ * `alliance total` is what your whole alliance is projected to score with this
+ * pick; `floor` and `ceiling` are what this one team contributes on its own.
+ * Printed as bare "value / floor / ceiling" they read as a range around a
+ * single number, so a captain sees "usually 110, sometimes 38" and picks on a
+ * fiction. That misreading is the entire reason these labels are this long.
+ */
 export function formatPicklist(ranked: readonly PicklistEntry[], limit = 20): string {
   const rows = ranked.slice(0, limit);
-  const lines = ['  #  team    value   floor  ceiling   risk'];
+  const lines = [
+    '                alliance    ---- this team alone ----',
+    '  #  team          total      floor      ceiling   risk',
+  ];
   rows.forEach((r, i) => {
     lines.push(
       `${String(i + 1).padStart(3)}  ${String(r.team).padStart(5)}  ` +
-        `${r.expectedValue.toFixed(1).padStart(6)}  ${r.floor.toFixed(1).padStart(5)}  ` +
-        `${r.ceiling.toFixed(1).padStart(7)}  ${(r.availabilityRisk * 100).toFixed(0).padStart(4)}%`,
+        `${r.expectedValue.toFixed(1).padStart(11)}  ${r.floor.toFixed(1).padStart(9)}  ` +
+        `${r.ceiling.toFixed(1).padStart(11)}  ${(r.availabilityRisk * 100).toFixed(0).padStart(4)}%`,
     );
   });
   lines.push('');
-  lines.push('risk = chance this team is gone before your next pick.');
+  lines.push('alliance total = your alliance WITH this pick. Rank on this column.');
   lines.push('floor = 20th percentile of their contribution; what you get on a bad day.');
+  lines.push('ceiling = 80th percentile. Floor and ceiling are THIS TEAM alone, not the total.');
+  lines.push('risk = chance this team is gone before your next pick.');
   return lines.join('\n');
 }

@@ -12,6 +12,20 @@ import { fileURLToPath } from 'node:url';
 import { loadProfileSet } from '@courier/bridge';
 import { Workspace } from './workspace.ts';
 import * as cmd from './commands.ts';
+import { picklist } from './picklist.ts';
+
+/** Parse a comma or space separated team list. Throws on anything that is not one. */
+function parseTeams(text: string | undefined): number[] {
+  if (!text) return [];
+  return text
+    .split(/[,\s]+/)
+    .filter((s) => s.length > 0)
+    .map((s) => {
+      const n = Number(s);
+      if (!Number.isInteger(n) || n < 1) throw new Error(`"${s}" is not a team number`);
+      return n;
+    });
+}
 
 const USAGE = `courier — move FRC scouting data between devices, by file
 
@@ -30,6 +44,8 @@ const USAGE = `courier — move FRC scouting data between devices, by file
   courier import <in.courier>               merge a bundle from anywhere
   courier report [team]                     what has been collected
   courier verify                            re-check every signature
+  courier picklist --schema <f> --field <f> --alliance <teams>
+                                            rank the board from your own scouting
 
 Options:
   --dir <path>        workspace directory (default .courier)
@@ -53,6 +69,12 @@ export async function run(argv: string[]): Promise<cmd.CommandResult> {
   const args = [...argv];
   const dir = takeOption(args, '--dir');
   const profilesPath = takeOption(args, '--profiles');
+  const schemaPath = takeOption(args, '--schema');
+  const field = takeOption(args, '--field');
+  const alliance = takeOption(args, '--alliance');
+  const exclude = takeOption(args, '--exclude');
+  const picksBetween = takeOption(args, '--picks-between');
+  const minObservations = takeOption(args, '--min-observations');
   const ws = new Workspace(dir);
   const command = args.shift();
 
@@ -111,6 +133,39 @@ export async function run(argv: string[]): Promise<cmd.CommandResult> {
 
     case 'verify':
       return cmd.verifyStore(ws);
+
+    case 'picklist': {
+      if (!schemaPath || !field || !alliance) {
+        return {
+          text:
+            'usage: courier picklist --schema <schema.json> --field <name> --alliance <teams>\n\n' +
+            'The schema is YOUR description of YOUR body format. Courier never parses a body\n' +
+            'in transit and does not ship a decoder for anyone else\'s app, because that would\n' +
+            'be a guess about a format that varies per team.',
+          code: 1,
+        };
+      }
+      try {
+        const between = picksBetween ? Number(picksBetween) : 0;
+        if (!Number.isInteger(between) || between < 0) {
+          return { text: '--picks-between must be a non-negative whole number', code: 1 };
+        }
+        const minObs = minObservations ? Number(minObservations) : undefined;
+        if (minObs !== undefined && (!Number.isInteger(minObs) || minObs < 1)) {
+          return { text: '--min-observations must be a positive whole number', code: 1 };
+        }
+        return picklist(ws, {
+          schemaPath,
+          field,
+          alliance: parseTeams(alliance),
+          exclude: parseTeams(exclude),
+          picksBetween: between,
+          minObservations: minObs,
+        });
+      } catch (err) {
+        return { text: (err as Error).message, code: 1 };
+      }
+    }
 
     default:
       return { text: `unknown command "${command}"\n\n${USAGE}`, code: 1 };
