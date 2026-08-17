@@ -89,16 +89,6 @@ internal class CourierGattClient(
          */
         const val SCAN_START_GRACE_MS = 500L
 
-        /**
-         * Don't re-report the same peer more often than this.
-         *
-         * At SCAN_MODE_LOW_LATENCY a nearby peer produces tens of results a
-         * second; forwarding all of them would spend the bridge on nothing.
-         * Re-reporting at all is worth it so the UI can refresh RSSI and so a
-         * peer that is still there does not look stale.
-         */
-        const val PEER_REPORT_INTERVAL_MS = 5_000L
-
         /** One retry on the notorious status 133; see onConnectionStateChange. */
         const val MAX_CONNECT_ATTEMPTS = 2
         const val RETRY_DELAY_MS = 600L
@@ -263,12 +253,21 @@ internal class CourierGattClient(
         }
     }
 
+    /**
+     * One `peerFound` per device per scan, matching iOS.
+     *
+     * This used to re-report every 5 s so a UI could refresh RSSI. iOS passes
+     * `CBCentralManagerScanOptionAllowDuplicatesKey: false` and emits once, for
+     * a reason that applies just as hard here: there are no power outlets in the
+     * stands, and a device has to last a full competition day. Two platforms
+     * reporting discovery at different rates is also a UI that behaves
+     * differently depending on which tablet a scout picked up.
+     *
+     * A caller that wants fresher data restarts the scan, which clears this map.
+     */
     private fun report(result: ScanResult) {
         val peerId = peers.idFor(result.device)
-        val now = android.os.SystemClock.elapsedRealtime()
-        val previous = lastReported[peerId]
-        if (previous != null && now - previous < PEER_REPORT_INTERVAL_MS) return
-        lastReported[peerId] = now
+        if (lastReported.putIfAbsent(peerId, 1L) != null) return
         // 127 is the "RSSI unavailable" sentinel, and any non-negative value is
         // meaningless for a received signal. Passing it through renders as a
         // full-strength bar, which is worse than showing nothing. Swift already

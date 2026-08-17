@@ -275,8 +275,19 @@ final class CourierPeripheral: NSObject {
     /// the bridge instead of two conventions that differ by three bytes.
     ///
     /// Documented behaviour, not measured.
+    ///
+    /// No floor at `minMtu`, deliberately. Clamping upward reports a capacity
+    /// the connection does not have: `payloadPerPacket()` would then size
+    /// packets against 23, every one of them would exceed
+    /// `maximumUpdateValueLength`, `send` would return `.tooLarge`, the call
+    /// would reject, and `PluginGattTransport` would treat that as a disconnect
+    /// — so the link dies pointing at the wrong thing.
+    ///
+    /// BLE guarantees an ATT MTU of at least 23, so a payload below 20 means
+    /// something is already wrong. Reporting it honestly lets `meshBlockers()`
+    /// say so; inventing 23 hides it until the first write.
     private static func attMtu(fromPayloadLength payload: Int) -> Int {
-        max(CourierGatt.minMtu, payload + CourierGatt.attOverhead)
+        payload + CourierGatt.attOverhead
     }
 
     /// Forget a central. Returns false if the handle is not one of ours.
