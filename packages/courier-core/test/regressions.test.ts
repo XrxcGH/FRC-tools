@@ -15,6 +15,7 @@ import {
   makeRecord,
   sealRecord,
   recordId,
+  supersede,
   parseMatchKey,
   toHex,
   utf8,
@@ -246,4 +247,76 @@ test('crafted sync messages are rejected at decode, not thrown from receive', ()
 test('a truncated id of the wrong width is refused', () => {
   const bad = encodeSyncMessage({ want: [new Uint8Array(4)] });
   assert.throws(() => decodeSyncMessage(bad), /truncated id/);
+});
+
+test('the current view of the whole store drops superseded revisions', () => {
+  // The bug this guards, found by reading the picklist command rather than by a
+  // failing test: analysis read `sortedIds`, which is the SYNC view — every
+  // record ever admitted, because a peer that has not seen a correction still
+  // needs the original to reconcile against. Averaged, a scout who fixed a typo
+  // counts twice, once at the wrong number and once at the right one, and both
+  // values are individually plausible so nothing catches it.
+  const mesh = new TestMesh();
+  const store = new RecordStore();
+
+  const first = mesh.seal({
+    device: 'tablet-1',
+    scout: 'ada',
+    matchKey: `${EVENT}_qm7`,
+    team: 8793,
+    body: utf8('{"teleop":110}'), // a slipped keystroke
+  });
+  store.admit(first.envelope, mesh.resolver);
+
+  const fixed = supersede(first.record, utf8('{"teleop":11}'), 1_800_000_060_000);
+  store.admit(sealRecord(fixed, mesh.device('tablet-1')), mesh.resolver);
+
+  // A second scout on the same robot must survive: a correction by one scout is
+  // not a correction of anyone else's observation.
+  const bo = mesh.seal({
+    device: 'tablet-2',
+    scout: 'bo',
+    matchKey: `${EVENT}_qm7`,
+    team: 8793,
+    body: utf8('{"teleop":12}'),
+  });
+  store.admit(bo.envelope, mesh.resolver);
+
+  assert.equal(store.size, 3, 'the log keeps all three');
+  const current = store.currentRecords();
+  assert.equal(current.length, 2, 'the current view keeps one per scout');
+  assert.equal(store.supersededCount(), 1);
+
+  const bodies = current.map((s) => new TextDecoder().decode(s.record.body)).sort();
+  assert.deepEqual(bodies, ['{"teleop":11}', '{"teleop":12}']);
+});
+
+test('the current view is ordered identically on two devices', () => {
+  // Two devices that hold the same records must produce the same sequence, or
+  // an analysis that depends on order — CUSUM over a scout's matches — reports
+  // different answers in the pit and in the stands.
+  const mesh = new TestMesh();
+  const a = new RecordStore();
+  const b = new RecordStore();
+
+  const sealed = [];
+  for (let m = 1; m <= 6; m++) {
+    for (const scout of ['ada', 'bo']) {
+      sealed.push(
+        mesh.seal({
+          device: 'tablet-1',
+          scout,
+          matchKey: `${EVENT}_qm${m}`,
+          team: 8790 + (m % 3),
+          body: utf8(`{"teleop":${m}}`),
+        }),
+      );
+    }
+  }
+  for (const s of sealed) a.admit(s.envelope, mesh.resolver);
+  for (const s of [...sealed].reverse()) b.admit(s.envelope, mesh.resolver);
+
+  const key = (store: RecordStore) =>
+    store.currentRecords().map((s) => toHex(s.recordId)).join(',');
+  assert.equal(key(a), key(b), 'admission order leaked into the analysis view');
 });

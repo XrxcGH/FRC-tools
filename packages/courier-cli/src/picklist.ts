@@ -65,14 +65,17 @@ export function picklist(ws: Workspace, args: PicklistArgs): CommandResult {
     return fail('no records yet. Run "courier ingest" first.');
   }
 
-  const stored = [...store.sortedIds].map((id) => store.get(id)!);
+  // The CURRENT view, not every record ever admitted. `sortedIds` is the sync
+  // view: a corrected observation leaves the original in the log forever so
+  // peers can still reconcile, and averaging that set counts the typo and the
+  // fix as two matches. Both numbers look plausible, so nothing catches it.
+  const stored = store.currentRecords();
+  const superseded = store.size - stored.length;
   const report = registry.decodeAll(stored);
 
   const gaps = describeGaps(report, stored.length);
   if (report.records.length === 0) {
-    return fail(
-      `none of the ${stored.length} records could be decoded.\n\n${gaps}`,
-    );
+    return fail(`none of the ${stored.length} records could be decoded.\n\n${gaps}`);
   }
 
   const minObs = args.minObservations ?? DEFAULT_MIN_OBSERVATIONS;
@@ -150,7 +153,8 @@ export function picklist(ws: Workspace, args: PicklistArgs): CommandResult {
   const mesh = ws.mesh();
   const lines: string[] = [
     `${mesh.eventKey} — picklist for ${args.alliance.join(' + ')}, on "${args.field}"`,
-    `${report.records.length} decoded record(s), ${estimates.length} team(s) with at least ${minObs}`,
+    `${report.records.length} decoded record(s), ${estimates.length} team(s) with at least ${minObs}` +
+      (superseded > 0 ? `, ${superseded} superseded revision(s) excluded` : ''),
     '',
     formatPicklist(ranked, args.limit ?? 20),
     '',
