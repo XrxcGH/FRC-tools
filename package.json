@@ -14,6 +14,7 @@
   "scripts": {
     "test": "node --experimental-strip-types --test --test-timeout 60000 \"packages/*/test/*.test.ts\"",
     "measure": "node --experimental-strip-types packages/courier-core/bench/measure.ts",
+    "measure:cusum": "node --experimental-strip-types packages/analytics/bench/cusum-operating-point.ts",
     "vectors": "node --experimental-strip-types spec/generate-vectors.ts",
     "demo": "node --experimental-strip-types demo/event-day.ts"
   }

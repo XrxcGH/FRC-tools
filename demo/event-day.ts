@@ -377,7 +377,7 @@ console.log(`  ${roundTrips} sync round trips, ${(wireBytes / 1024).toFixed(0)} 
 console.log(
   dim(
     `\n  At the design's assumed 12 kB/s for the slowest BLE path, ${(wireBytes / 1024 / 12).toFixed(0)} s of radio time.\n` +
-      '  That figure is an assumption carried through, not a measurement — see docs/MEASUREMENTS.md §5.',
+      '  That figure is an assumption carried through, not a measurement — see docs/MEASUREMENTS.md §6.',
   ),
 );
 console.log();
