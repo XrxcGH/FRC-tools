@@ -48,17 +48,22 @@ export {
 export {
   blendWithOfficial,
   scoutReliability,
+  scoutEffects,
+  adjustForPeers,
   cusumUpdate,
   describeDrift,
   BlendError,
   MIN_OBSERVATIONS_FOR_RELIABILITY,
   CUSUM_SLACK,
   CUSUM_THRESHOLD,
+  SCOUT_EFFECT_LAMBDA,
   type ScoutObservation,
   type BlendInput,
   type BlendResult,
   type ScoutResidual,
   type ScoutQuality,
+  type PeerComparison,
+  type ScoutEffect,
   type CusumState,
 } from './blend.ts';
 

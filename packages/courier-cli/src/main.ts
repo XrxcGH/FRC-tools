@@ -13,6 +13,7 @@ import { loadProfileSet } from '@courier/bridge';
 import { Workspace } from './workspace.ts';
 import * as cmd from './commands.ts';
 import { picklist } from './picklist.ts';
+import { scouts } from './scouts.ts';
 
 /** Parse a comma or space separated team list. Throws on anything that is not one. */
 function parseTeams(text: string | undefined): number[] {
@@ -46,6 +47,7 @@ const USAGE = `courier — move FRC scouting data between devices, by file
   courier verify                            re-check every signature
   courier picklist --schema <f> --field <f> --alliance <teams>
                                             rank the board from your own scouting
+  courier scouts --schema <f> --field <f>    who is drifting, from peer disagreement
 
 Options:
   --dir <path>        workspace directory (default .courier)
@@ -133,6 +135,20 @@ export async function run(argv: string[]): Promise<cmd.CommandResult> {
 
     case 'verify':
       return cmd.verifyStore(ws);
+
+    case 'scouts': {
+      if (!schemaPath || !field) {
+        return {
+          text:
+            'usage: courier scouts --schema <schema.json> --field <name>\n\n' +
+            'Finds scouts whose numbers disagree with the other people watching the same\n' +
+            'robot, so a drifting scout can be re-tasked during the event rather than\n' +
+            'discovered from a wrong picklist afterwards.',
+          code: 1,
+        };
+      }
+      return scouts(ws, { schemaPath, field });
+    }
 
     case 'picklist': {
       if (!schemaPath || !field || !alliance) {

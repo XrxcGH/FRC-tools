@@ -41,3 +41,10 @@ export {
   type TeamEstimateOptions,
   type TeamEstimateResult,
 } from './observations.ts';
+
+export {
+  peerResiduals,
+  residualScale,
+  type PeerResidual,
+  type ResidualReport,
+} from './reliability.ts';

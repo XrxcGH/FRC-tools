@@ -23,3 +23,4 @@ export {
 export { run } from './main.ts';
 
 export { picklist, type PicklistArgs } from './picklist.ts';
+export { scouts, type ScoutsArgs } from './scouts.ts';
