@@ -254,7 +254,20 @@ export function rankPicklist(opts: PicklistOptions): PicklistEntry[] {
         ceiling: percentile(xs, 0.8),
       };
     })
-    .sort((a, b) => b.expectedValue - a.expectedValue);
+    .sort((a, b) => {
+      // Expected value first, then FLOOR.
+      //
+      // Ties are not rare and not artificial: with a serpentine draft, taking
+      // team A and leaving B often produces the same final alliance as taking B
+      // and leaving A, so the two score identically. When the model genuinely
+      // cannot separate two options on expected value, the tiebreak should be
+      // the thing a captain would actually use — and second-pick decisions are
+      // floor-driven, because you cannot afford a dud. Leaving it to array
+      // order would silently rank a shakier team above a steadier one.
+      const byValue = b.expectedValue - a.expectedValue;
+      if (Math.abs(byValue) > 1e-9) return byValue;
+      return b.floor - a.floor;
+    });
 }
 
 /** Probability a team is taken before your next pick, if you pass on them now. */

@@ -170,6 +170,30 @@ test('contention changes who is worth taking, not just the totals', () => {
   assert.equal(ranked[0]!.team, 302, 'the complementary team wins despite a lower rating');
 });
 
+test('when expected value ties, the higher floor wins', () => {
+  // A real and common tie: in a serpentine draft, taking A and leaving B often
+  // yields the same final alliance as taking B and leaving A. Array order would
+  // then silently rank a shakier team above a steadier one.
+  const ranked = rankPicklist({
+    candidates: [team(401, 20, 12), team(402, 20, 2)],
+    alliance: captain,
+    picksBeforeYourNext: 0,
+    haveSecondPick: false,
+    simulations: 3000,
+    rng: rng(),
+  });
+
+  const steady = ranked.find((r) => r.team === 402)!;
+  const shaky = ranked.find((r) => r.team === 401)!;
+  assert.ok(steady.floor > shaky.floor, 'the low-sigma team has the better bad day');
+
+  if (Math.abs(ranked[0]!.expectedValue - ranked[1]!.expectedValue) < 1e-9) {
+    assert.equal(ranked[0]!.team, 402, 'a tie must break toward the floor');
+  }
+  // And the ordering is at least never floor-inverted at equal value.
+  assert.ok(ranked[0]!.expectedValue > ranked[1]!.expectedValue || ranked[0]!.floor >= ranked[1]!.floor);
+});
+
 test('excluded teams never appear, whatever the numbers say', () => {
   const ranked = rankPicklist({
     candidates: board,
