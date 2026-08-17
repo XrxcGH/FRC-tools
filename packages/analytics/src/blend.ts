@@ -23,6 +23,8 @@
  * form.
  */
 
+import { cholesky, choleskySolve } from './linalg.ts';
+
 export class BlendError extends Error {
   constructor(message: string) {
     super(message);
@@ -306,8 +308,30 @@ export interface CusumState {
   readonly since: number;
 }
 
-export const CUSUM_SLACK = 0.5;
-export const CUSUM_THRESHOLD = 4;
+/**
+ * Slack and threshold, in units of the pool's own disagreement spread.
+ *
+ * MEASURED, not quoted. These were 0.5 and 4 — the textbook pairing, carried in
+ * with a comment admitting they had never been checked. Running the real
+ * `courier scouts` command against generated events with no drift injected
+ * accused one or two innocent scouts every time, so they were measured:
+ * `packages/analytics/bench/cusum-operating-point.ts` reproduces the table.
+ *
+ * At 0.5 / 4 a clean scout alarms with probability 0.24 over the ~48 paired
+ * observations of a two-day event. With six scouts that is a 78% chance of
+ * accusing somebody who did nothing wrong, EVERY event. The textbook figure
+ * (in-control run length ~168) is not wrong, it is answering a different
+ * question: teams run their scouts in parallel and care about the chance that
+ * any of them is falsely flagged once.
+ *
+ * At 0.75 / 5 that falls to 1.0% per scout, 6% across a team of six, while a
+ * 1.5σ or worse drift is still caught essentially every time within three to
+ * five of that scout's paired observations. The price is missing about a fifth
+ * of mild 1σ drifts, and that is the right trade: a drift table people believe
+ * catches more real problems than a stricter one they have learned to skip.
+ */
+export const CUSUM_SLACK = 0.75;
+export const CUSUM_THRESHOLD = 5;
 
 /**
  * CUSUM on the standardised residual — the detector that actually catches a
@@ -317,11 +341,13 @@ export const CUSUM_THRESHOLD = 4;
  * numbers drift systematically low. A per-match outlier test never fires on that
  * because no single match is extreme; the drift only shows up cumulatively.
  *
- * Slack of 0.5σ and a threshold of 4σ alarm after roughly four to six
- * consecutive one-sigma-biased matches — fast enough to re-task someone during
- * an event, slow enough not to fire on one bad match. Those constants are the
- * standard textbook pairing and have NOT been tuned against real scouting data,
- * because none was available here.
+ * The constants alarm after roughly seven consecutive one-sigma-biased matches
+ * — fast enough to re-task someone during an event, slow enough that a clean
+ * scout is almost never accused. See CUSUM_SLACK for the measurement behind
+ * them. They are still calibrated against SIMULATED drift, not against real
+ * scouting data, because none was available here; what has been checked is the
+ * false-alarm rate, which is a property of the detector rather than of the
+ * data.
  */
 export function cusumUpdate(
   previous: CusumState | null,
@@ -348,4 +374,126 @@ export function describeDrift(state: CusumState, lastResidual: number): string {
         'the right robot.'
     : 'This scout has been over-counting for several matches. Check they are not double-' +
         'counting shared game pieces.';
+}
+
+/* -------------------------------------------------------------------------- */
+/* Disentangling scouts from each other                                       */
+/* -------------------------------------------------------------------------- */
+
+export interface PeerComparison {
+  readonly scout: string;
+  /** The other scouts on the same robot in the same match. */
+  readonly peers: readonly string[];
+  /** This scout's value minus the mean of their peers' values. */
+  readonly residual: number;
+}
+
+export interface ScoutEffect {
+  readonly scout: string;
+  /** Additive offset from the group, centred so the effects sum to zero. */
+  readonly effect: number;
+  readonly comparisons: number;
+}
+
+/** Ridge weight for the effects fit. Small: this system is only rank-deficient by one. */
+export const SCOUT_EFFECT_LAMBDA = 0.5;
+
+/**
+ * Who is actually off, when everyone is measured against everyone else.
+ *
+ * Peer residuals cannot be read one row at a time. With two scouts on a robot
+ * the two residuals are exact negatives of each other: if one drifts low by 5,
+ * the other's residual is +5 through no fault of their own. Run a drift
+ * detector on those raw numbers and one careless scout sets off an alarm on
+ * every honest person they were ever paired with — which is worse than no
+ * detector, because a table of alarms that are mostly wrong teaches people to
+ * stop reading it.
+ *
+ * The disambiguation has to come from ACROSS pairings. A scout who reads low
+ * against everyone is low; a scout who only looks high when paired with that
+ * one person is fine. So this fits an additive effect per scout to
+ *
+ *     residual(i, j) = effect(i) - mean(effect(p) for p in peers(j))
+ *
+ * by ridge least squares, and the caller subtracts the peers' fitted effects
+ * before looking at anybody's numbers. Adding a constant to every effect leaves
+ * every residual unchanged, so the system is rank-deficient by exactly one; the
+ * ridge term picks the minimum-norm solution and the result is then centred
+ * explicitly rather than left to depend on the regulariser.
+ *
+ * This still cannot separate two scouts who are the ONLY pair that ever watches
+ * a robot together — there is no third opinion to break the symmetry, and the
+ * fit will split the difference between them. That is a real limit of peer
+ * consensus and not something a better estimator fixes.
+ */
+export function scoutEffects(
+  rows: readonly PeerComparison[],
+  lambda: number = SCOUT_EFFECT_LAMBDA,
+): ScoutEffect[] {
+  const names = [...new Set(rows.flatMap((r) => [r.scout, ...r.peers]))].sort();
+  const n = names.length;
+  if (n === 0) return [];
+  if (n === 1) return [{ scout: names[0]!, effect: 0, comparisons: rows.length }];
+
+  const index = new Map(names.map((s, i) => [s, i]));
+  const counts = new Map<string, number>();
+
+  // Normal equations, accumulated row by row: no design matrix is materialised
+  // because it is one row per comparison and mostly zeros.
+  const ata = new Float64Array(n * n);
+  const atb = new Float64Array(n);
+
+  for (const r of rows) {
+    if (!Number.isFinite(r.residual) || r.peers.length === 0) continue;
+    counts.set(r.scout, (counts.get(r.scout) ?? 0) + 1);
+
+    const row = new Float64Array(n);
+    row[index.get(r.scout)!] = 1;
+    const share = 1 / r.peers.length;
+    for (const p of r.peers) row[index.get(p)!] -= share;
+
+    for (let i = 0; i < n; i++) {
+      const vi = row[i]!;
+      if (vi === 0) continue;
+      atb[i] += vi * r.residual;
+      for (let j = 0; j < n; j++) {
+        const vj = row[j]!;
+        if (vj !== 0) ata[i * n + j] += vi * vj;
+      }
+    }
+  }
+
+  for (let i = 0; i < n; i++) ata[i * n + i] += lambda;
+
+  const solved = choleskySolve(cholesky(ata, n), n, atb);
+  const centre = [...solved].reduce((a, b) => a + b, 0) / n;
+
+  return names
+    .map((scout, i) => ({
+      scout,
+      effect: solved[i]! - centre,
+      comparisons: counts.get(scout) ?? 0,
+    }))
+    .sort((a, b) => a.effect - b.effect);
+}
+
+/**
+ * Each comparison with the PEERS' fitted effects removed.
+ *
+ * What is left is that scout's own deviation on that robot in that match,
+ * uncontaminated by whoever they happened to be sitting next to. This is the
+ * sequence a drift detector should walk, and the sequence a bias estimate
+ * should average.
+ */
+export function adjustForPeers(
+  rows: readonly PeerComparison[],
+  effects: readonly ScoutEffect[],
+): number[] {
+  const byName = new Map(effects.map((e) => [e.scout, e.effect]));
+  return rows.map((r) => {
+    if (r.peers.length === 0) return r.residual;
+    const peerMean =
+      r.peers.reduce((a, p) => a + (byName.get(p) ?? 0), 0) / r.peers.length;
+    return r.residual + peerMean;
+  });
 }

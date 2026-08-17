@@ -7,6 +7,7 @@ import {
   describeDrift,
   BlendError,
   MIN_OBSERVATIONS_FOR_RELIABILITY,
+  CUSUM_SLACK,
   CUSUM_THRESHOLD,
   type CusumState,
 } from '../src/index.ts';
@@ -244,19 +245,28 @@ test('one bad match does not raise an alarm', () => {
   assert.equal(state.alarm, false, 'a single outlier is not a drifting scout');
 });
 
-test('a sustained one-sigma drift alarms within a handful of matches', () => {
+test('a sustained drift alarms within a handful of matches', () => {
   // A scout who stops watching keeps submitting and drifts low. No single match
   // is extreme, so only the cumulative sum catches it.
-  let state: CusumState | null = null;
-  let matches = 0;
-  while (matches < 20) {
-    state = cusumUpdate(state, -1);
-    matches++;
-    if (state.alarm) break;
-  }
-  assert.equal(state!.alarm, true, 'must eventually fire');
-  assert.ok(matches >= 4 && matches <= 10, `fired after ${matches} matches`);
-  assert.match(describeDrift(state!, -1), /under-counting/);
+  const matchesToAlarm = (shift: number): number => {
+    let state: CusumState | null = null;
+    for (let n = 1; n <= 40; n++) {
+      state = cusumUpdate(state, shift);
+      if (state.alarm) return n;
+    }
+    return Infinity;
+  };
+
+  // The alarm is on a strict >, so -2 needs 5 steps of 1.25 to clear a threshold of 5.
+  assert.equal(matchesToAlarm(-2), 5, 'a scout who has largely stopped watching');
+  assert.equal(matchesToAlarm(-1.5), 7);
+
+  // And a MILD one-sigma drift is deliberately slow: 21 noiseless matches. That
+  // is the price of the false-alarm rate, and the bench measures it — with real
+  // noise the median is 11 and about a fifth are never caught at all. Catching
+  // every mild drift would mean accusing an innocent scout most events.
+  assert.equal(matchesToAlarm(-1), 21);
+  assert.match(describeDrift(cusumUpdate(null, 0), -1), /^$/, 'no alarm, no message');
 });
 
 test('an accurate scout never alarms, however long they scout', () => {
@@ -280,14 +290,30 @@ test('an alarm resets, so the next drift is detected from scratch', () => {
 });
 
 test('the alarm threshold is what the constants say it is', () => {
-  // Guards against someone tuning the constants without revisiting the claim
-  // that an alarm takes four to six one-sigma matches.
-  assert.equal(CUSUM_THRESHOLD, 4);
+  // Guards against someone loosening the constants without redoing the
+  // measurement. They are not the textbook pairing on purpose: at 0.5 / 4 a
+  // clean scout alarms 23% of the time over one event's paired observations,
+  // which accuses somebody innocent at four events out of five on a six-scout
+  // team. See packages/analytics/bench/cusum-operating-point.ts.
+  assert.equal(CUSUM_SLACK, 0.75);
+  assert.equal(CUSUM_THRESHOLD, 5);
   let state: CusumState | null = null;
   let n = 0;
   while (!(state?.alarm ?? false) && n < 50) {
     state = cusumUpdate(state, -1);
     n++;
   }
-  assert.equal(n, 9, 'slack 0.5 and threshold 4 means nine half-sigma steps');
+  assert.equal(n, 21, 'slack 0.75 and threshold 5 means twenty-one quarter-sigma steps');
+});
+
+test('a clean scout is almost never accused across a whole event', () => {
+  // The property that drove the constants. Deterministic wobble rather than a
+  // PRNG so this cannot go green by luck; the probabilistic version lives in
+  // the bench, which is where 20,000 trials belong.
+  let state: CusumState | null = null;
+  const wobble = [0.7, -0.6, 0.4, -0.7, 0.2, 0.6, -0.5, 0.7, -0.65, 0.15];
+  for (let i = 0; i < 200; i++) {
+    state = cusumUpdate(state, wobble[i % wobble.length]!);
+    assert.equal(state.alarm, false, `false alarm at observation ${i}`);
+  }
 });
