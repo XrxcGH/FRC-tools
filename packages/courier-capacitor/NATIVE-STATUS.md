@@ -17,32 +17,38 @@ The thing the design cares about most is correct on both platforms:
 
 | # | Fix |
 |---|---|
-| 1 | `src/plugin.ts` now registers the plugin; without it nothing was reachable from JS |
+| 1 | `src/plugin.ts` registers the plugin. Without it nothing was reachable from JS at all |
 | 2 | `CourierBle.podspec` and the `capacitor` block in `package.json`, so `npx cap sync` can find both halves |
-| 4 | The listener race is closed in TypeScript by [`CourierBleHub`](src/hub.ts), which registers listeners once and demuxes by `peerId`. `retainUntilConsumed` should now be removed from the Swift emissions — it is no longer needed and is actively harmful, because Capacitor flushes a retained queue to the *first* listener and one peer would drain another's packets |
-| 7 | `CourierGattServer.labelOf` returned the Android adapter name, which is very often a person's name. Now returns `""` |
+| 3 | `CourierCentral.swift` reads the Courier label from **service data** before the local name, and no longer falls back to `peripheral.name` — the GAP name on a phone is frequently personal |
+| 4 | The listener race is closed in TypeScript by [`CourierBleHub`](src/hub.ts), which registers listeners once and demuxes by `peerId`. `retainUntilConsumed` is removed from both Swift emissions: it was correct when written and became harmful the moment the hub closed that window, because Capacitor flushes a retained queue to the *first* listener and one peer would drain another's packets |
+| 5 | Both Android roles carry a per-peer `readyOwed` flag, so `readyToWrite` fires only when a write was actually refused — matching Swift, and no longer spending the bridge once per packet |
+| 6 | `CourierBlePlugin.kt` keeps **one PeerRegistry per role**. Sharing one meant a crossed connection produced a single `peerId` and interleaved two ordered streams into one reassembler, losing every interleaved frame |
+| 7 | `CourierGattServer.labelOf` returned the Android adapter name, which is very often a person's name. Now `""` |
+| 8 | All four `peerFound.label` paths return `""` when no Courier label exists, instead of three different sentinels |
+| 9 | Android drops the RSSI `127` "unavailable" sentinel, which would otherwise render as full signal strength |
+| 11 | Android rejects an empty packet, as Swift already did |
+| 13 | `CourierGattServer` refuses an RX write from a central that never subscribed, instead of minting a `peerId` JS was never told about |
+| 14 | Connect timeout is 15 s on both platforms |
 | 15 | `definitions.ts` said "three events"; there are four |
-| — | The three Kotlin files now carry the "NOT COMPILED, NOT RUN, NO DEVICE" header the Swift files had, and three over-claiming comments are qualified |
-| 3 | `CourierCentral.swift` now reads the Courier label from **service data** before falling back to the local name, and no longer falls back to `peripheral.name` — the GAP name on a phone is frequently personal |
-| 6 | `CourierBlePlugin.kt` now keeps **one PeerRegistry per role**. Sharing one meant a crossed connection produced a single peerId and interleaved two ordered streams into one reassembler, losing every interleaved frame |
-| 5 | Both Android roles now carry a per-peer `readyOwed` flag, so `readyToWrite` fires only when a write was actually refused — matching Swift, and no longer spending the bridge once per packet |
+| — | The three Kotlin files carry the "NOT COMPILED, NOT RUN, NO DEVICE" header the Swift files had |
 
-## Outstanding — must be fixed before a device test
+## Outstanding
 
-Ordered by what will bite first on a mixed-platform test.
+None from the cross-review. All fifteen items are addressed.
 
-| # | Where | Defect |
-|---|---|---|
-| 12 | `CourierCentral.swift` | `max(minMtu, payload + 3)` can report an MTU larger than the connection carries, after which every write fails and the link dies with a misleading error |
-| 10 | both | Android re-emits `peerFound` every 5 s, iOS emits once per scan |
+That is not the same as working. Nothing here has been compiled, and the twelve-item hardware list in [`android/README.md`](android/README.md) is untouched — it records what could not be checked without two devices, including the per-device-vs-per-server ambiguity in `onNotificationSent` and the MTU-before-discovery ordering.
 
+Two of the fixes were judgement calls rather than obvious corrections, and are worth re-examining once someone has hardware:
+
+- **The MTU floor (12).** `attMtu` no longer clamps up to 23. Clamping reported a capacity the connection did not have, so framing sized packets that every write then refused as `.tooLarge` — surfacing as a disconnect pointing at the wrong cause. BLE guarantees at least 23, so a smaller value is a real fault worth seeing. If some device legitimately reports a short payload, this turns a silent stall into a loud failure, which is the intended trade but is still a trade.
+- **Discovery cadence (10).** Android now emits one `peerFound` per device per scan, matching iOS, instead of re-reporting every 5 s. Both behaviours were defensible; the divergence was the defect. Aligning to the cheaper one follows the design's own constraint that there are no power outlets in the stands. The cost is that a UI wanting live RSSI must restart the scan.
 ## Honesty corrections applied
 
-The review found three claims stated more strongly than the evidence supports. All three are now qualified: the write-without-response throughput claim is marked as a reading of the spec rather than a measurement, the status-133 retry success rate is marked unmeasured, and `capabilities` says "reports it can do, queried at runtime" instead of "verified". The three Kotlin files also carry the not-compiled header the Swift files already had.
+The review found three claims stated more strongly than the evidence supports, which matters more here than usual because nobody can check them by running anything. All three are qualified: the write-without-response throughput claim is marked as a reading of the spec rather than a measurement; the status-133 retry success rate is marked unmeasured and attributed to other people's bug reports; and `capabilities` says "reports it can do, queried at runtime" rather than "verified".
+
 ## Before a device test
 
-1. Get it to compile. That is now the gating step: every defect the cross-review found that would misbehave on a mixed-platform test has been addressed, and what remains (the iOS MTU floor and the discovery cadence) is cosmetic by comparison.
-2. Get it to compile. Nothing here has seen a compiler.
-3. Then work the twelve-item verification list in [`android/README.md`](android/README.md) and the equivalent in [`ios/README.md`](ios/README.md), which record what could not be checked without hardware.
+1. **Get it to compile.** This is the gating step and nothing here has seen a compiler. Expect the first build to find typos in delegate and callback signatures.
+2. Work the twelve-item verification list in [`android/README.md`](android/README.md) and the equivalent in [`ios/README.md`](ios/README.md), which record what could not be checked without hardware — including the per-device-vs-per-server ambiguity in `onNotificationSent` and the MTU-before-discovery ordering.
 
-And when the radio numbers finally exist, revisit [`docs/MEASUREMENTS.md`](../../docs/MEASUREMENTS.md) §5 — `LEAF_THRESHOLD` in the reconciliation layer is derived from an *assumed* ~1.8 s connection setup, and that assumption becomes checkable the moment two real devices talk.
+And when the radio numbers finally exist, revisit [`docs/MEASUREMENTS.md`](../../docs/MEASUREMENTS.md) §5. `LEAF_THRESHOLD` in the reconciliation layer is derived from an *assumed* ~1.8 s connection setup, and that assumption becomes checkable the moment two real devices talk.

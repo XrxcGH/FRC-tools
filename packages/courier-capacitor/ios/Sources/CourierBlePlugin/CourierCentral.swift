@@ -567,9 +567,14 @@ extension CourierCentral: CBPeripheralDelegate {
         peers[peerId]?.tx = tx
         peers[peerId]?.writeType = writeType
         // See `write` for why this is always the without-response length.
-        peers[peerId]?.mtu = max(
-            CourierGatt.minMtu,
-            peripheral.maximumWriteValueLength(for: .withoutResponse) + CourierGatt.attOverhead)
+        //
+        // Not clamped up to `minMtu`. Reporting a capacity the connection does
+        // not have makes framing size packets that every write then refuses as
+        // `.tooLarge`, which surfaces as a disconnect pointing at the wrong
+        // cause. BLE guarantees at least 23, so a smaller value is a real fault
+        // and worth seeing.
+        peers[peerId]?.mtu =
+            peripheral.maximumWriteValueLength(for: .withoutResponse) + CourierGatt.attOverhead
 
         // The link is not usable until notifications are on: without this,
         // nothing the peer sends ever arrives.
