@@ -317,3 +317,54 @@ test('an empty store points at ingest', async () => {
     s.cleanup();
   }
 });
+
+test('a same-scout re-scan is reported as a coin toss, not as a correction', async () => {
+  // The defect this exists for. A scout who fixes an entry and re-prints the QR
+  // leaves two revision-0 heads; the store breaks the tie on record-id bytes.
+  // Calling that "superseded — the corrections are what you have" tells the
+  // operator the opposite of what happened whenever the loser was the fix.
+  const s = scratch();
+  try {
+    const { wsDir, schemaPath } = fixture(s.dir, [
+      tsv('ada', 1, 8793, 3, 11, 'first try'),
+      tsv('ada', 1, 8793, 7, 19, 'corrected in the app'),
+    ]);
+
+    const r = await go(wsDir, '--schema', schemaPath);
+    assert.equal(r.code, 0, r.text);
+    assert.equal(r.text.trim().split('\n').length, 2, 'one header, one surviving row');
+
+    assert.match(r.stderr!, /CHOSEN BY RECORD-ID/);
+    assert.match(r.stderr!, /may not be the later or the better one/);
+    assert.match(r.stderr!, /Q1 team 8793/);
+    assert.match(r.stderr!, /still in the store and still syncs/);
+    // The claim that was false.
+    assert.ok(
+      !/the corrections are what you have/.test(r.stderr!),
+      'still claiming a hash tie-break was a correction',
+    );
+  } finally {
+    s.cleanup();
+  }
+});
+
+test('a real correction is still reported as a correction', async () => {
+  const s = scratch();
+  try {
+    const { wsDir, schemaPath } = fixture(s.dir, DEFAULT_LINES);
+    const ws = new Workspace(wsDir);
+    const store = ws.store();
+    const wrong = store
+      .currentRecords()
+      .find((x) => new TextDecoder().decode(x.record.body).includes('clean'))!;
+    const fixed = supersede(wrong.record, utf8(tsv('ada', 1, 8793, 3, 12, 'corrected')));
+    store.admit(sealRecord(fixed, ws.device()), ws.registry().resolver());
+    ws.writeStore(store);
+
+    const r = await go(wsDir, '--schema', schemaPath);
+    assert.match(r.stderr!, /1 superseded revision\(s\) excluded/);
+    assert.ok(!/CHOSEN BY RECORD-ID/.test(r.stderr!), 'a real correction was called a coin toss');
+  } finally {
+    s.cleanup();
+  }
+});

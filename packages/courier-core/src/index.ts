@@ -97,6 +97,7 @@ export {
 export {
   RecordStore,
   type StoreStats,
+  type ObservationConflict,
   type AdmitResult,
 } from './store.ts';
 

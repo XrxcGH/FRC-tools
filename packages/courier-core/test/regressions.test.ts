@@ -403,3 +403,99 @@ test('the current view is ordered identically on two devices', () => {
     store.currentRecords().map((s) => toHex(s.recordId)).join(',');
   assert.equal(key(a), key(b), 'admission order leaked into the analysis view');
 });
+
+test('a same-scout re-scan is a conflict, not a correction', () => {
+  // A scout who fixes an entry and re-prints the QR produces two scans. The
+  // Bridge seals both with revision 0 and supersedes null — it cannot know the
+  // second is a correction — so the store has two heads from one scout and
+  // breaks the tie on record-id bytes. That is a hash deciding which number the
+  // team believes, and reporting it as "superseded, the corrections are what
+  // you have" says the opposite of what happened about half the time.
+  const mesh = new TestMesh();
+  const store = new RecordStore();
+  const scan = (body: string, at: number) =>
+    mesh.seal({
+      device: 'tablet-1',
+      scout: 'ada',
+      matchKey: `${EVENT}_qm1`,
+      team: 8793,
+      body: utf8(body),
+      sealedAt: at,
+    });
+
+  store.admit(scan('first try', 1_800_000_000_000).envelope, mesh.resolver);
+  store.admit(scan('corrected', 1_800_000_060_000).envelope, mesh.resolver);
+
+  assert.equal(store.size, 2);
+  assert.equal(store.currentRecords().length, 1, 'the store must still resolve to one');
+
+  const conflicts = store.conflicts();
+  assert.equal(conflicts.length, 1);
+  assert.equal(conflicts[0]!.team, 8793);
+  assert.equal(conflicts[0]!.dropped.length, 1);
+  assert.equal(toHex(conflicts[0]!.kept), toHex(store.currentRecords()[0]!.recordId));
+});
+
+test('an explicit correction is a supersession and not reported as a conflict', () => {
+  const mesh = new TestMesh();
+  const store = new RecordStore();
+  const first = mesh.seal({
+    device: 'tablet-1',
+    scout: 'ada',
+    matchKey: `${EVENT}_qm1`,
+    team: 8793,
+    body: utf8('typo'),
+  });
+  store.admit(first.envelope, mesh.resolver);
+  const fixed = supersede(first.record, utf8('right'), 1_800_000_060_000);
+  store.admit(sealRecord(fixed, mesh.device('tablet-1')), mesh.resolver);
+
+  assert.equal(store.currentRecords().length, 1);
+  assert.deepEqual(store.conflicts(), [], 'a real correction is not a coin toss');
+  assert.equal(
+    new TextDecoder().decode(store.currentRecords()[0]!.record.body),
+    'right',
+    'the correction must win, not the hash',
+  );
+});
+
+test('two identical scans from one scout are not a conflict', () => {
+  // Whichever survives says the same thing. Flagging it would train people to
+  // ignore the warning that matters.
+  const mesh = new TestMesh();
+  const store = new RecordStore();
+  for (const at of [1_800_000_000_000, 1_800_000_030_000]) {
+    store.admit(
+      mesh.seal({
+        device: 'tablet-1',
+        scout: 'ada',
+        matchKey: `${EVENT}_qm1`,
+        team: 8793,
+        body: utf8('same'),
+        sealedAt: at,
+      }).envelope,
+      mesh.resolver,
+    );
+  }
+  assert.equal(store.size, 2);
+  assert.deepEqual(store.conflicts(), []);
+});
+
+test('two scouts disagreeing is not a conflict — it is the point', () => {
+  const mesh = new TestMesh();
+  const store = new RecordStore();
+  for (const scout of ['ada', 'bo']) {
+    store.admit(
+      mesh.seal({
+        device: 'tablet-1',
+        scout,
+        matchKey: `${EVENT}_qm1`,
+        team: 8793,
+        body: utf8(`${scout} saw it differently`),
+      }).envelope,
+      mesh.resolver,
+    );
+  }
+  assert.equal(store.currentRecords().length, 2, 'both opinions must survive');
+  assert.deepEqual(store.conflicts(), []);
+});
