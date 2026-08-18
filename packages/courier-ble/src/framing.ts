@@ -51,6 +51,22 @@ export class FramingError extends Error {
 const FLAG_FINAL = 0x01;
 
 export function payloadPerPacket(mtu: number): number {
+  // `usable < 1` alone is not a guard: NaN < 1 is false, so a NaN MTU sailed
+  // through and split() then returned ZERO packets — Math.ceil(len / NaN) is
+  // NaN, and `for (i = 0; i < NaN; i++)` never runs. GattLink.send would iterate
+  // nothing, skip the whole backpressure loop, increment framesSent and resolve
+  // normally, having transmitted nothing at all.
+  //
+  // MTU is not a local constant. It crosses the native bridge — hub.ts calls
+  // setMtu(conn.mtu) straight from the plugin's connect() result — so a shim
+  // that omits the field, returns null, or reports iOS's
+  // maximumUpdateValueLength before subscription yields undefined and then NaN.
+  if (!Number.isInteger(mtu)) {
+    throw new FramingError(
+      `MTU ${mtu} is not an integer. A missing or unreported MTU from the native layer ` +
+        `must fail here, not silently send zero packets.`,
+    );
+  }
   const usable = mtu - ATT_OVERHEAD - HEADER_BYTES;
   if (usable < 1) throw new FramingError(`MTU ${mtu} is too small to carry any payload`);
   return usable;

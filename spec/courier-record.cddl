@@ -41,12 +41,18 @@ CourierRecord = {
 }
 
 version         = 1
+; `.size` on a tstr is BYTES, not characters. Stated because measuring UTF-16
+; code units instead lets an implementation emit a 32-byte key that passes its
+; own check and fails this one.
 event-key       = tstr .size (4..16)
 ; Bounded at 32 bits by the shift widths in the packing scheme. Stated here so
 ; the CDDL and the decoder agree: an unbounded `uint` would admit values the
 ; implementation cannot represent.
 match-packed    = uint .le 4294967295   ; see spec/canonical-cbor.md "Match packing"
-team            = uint .le 99999
+; 1..99999, not 0..99999. There is no team 0, and an unbounded-below `uint`
+; would let a conformant encoder produce a record this implementation refuses --
+; a spec looser than its only implementation is a spec that lies.
+team            = uint .ge 1 .le 99999
 scout-pseudonym = bstr .size 8
 schema-id       = tstr .size (1..64)
 ; Milliseconds since the Unix epoch, bounded at 2^53-1 — the largest integer a

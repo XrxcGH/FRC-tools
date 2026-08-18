@@ -310,3 +310,20 @@ test('a peer that stops draining ends as peer-silent, not protocol-error', async
   assert.equal(out.ending, 'peer-silent', `reported ${out.ending}: ${out.error ?? ''}`);
   assert.match(out.error!, /stalled for 60 ms/);
 });
+
+test('a missing MTU from the native layer fails loudly, not silently', () => {
+  // NaN < 1 is false, so a NaN MTU passed the "too small" guard and
+  // payloadPerPacket returned NaN. split() then produced ZERO packets —
+  // Math.ceil(len / NaN) is NaN and `for (i = 0; i < NaN; i++)` never runs — so
+  // GattLink.send iterated nothing, skipped the backpressure loop, incremented
+  // framesSent and resolved normally, having transmitted nothing.
+  //
+  // MTU crosses the native bridge, so an undefined field from a shim is exactly
+  // how NaN gets here.
+  for (const bad of [NaN, undefined as unknown as number, null as unknown as number, 23.5]) {
+    assert.throws(() => payloadPerPacket(bad), /not an integer|too small/, `accepted ${bad}`);
+    assert.throws(() => split(utf8('hello'), bad, 1), /not an integer|too small/);
+  }
+  // A real MTU still works, and produces at least one packet.
+  assert.ok(split(utf8('hello'), MIN_MTU, 1).length >= 1);
+});

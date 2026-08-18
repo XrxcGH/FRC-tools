@@ -18,6 +18,9 @@ import {
   supersede,
   parseMatchKey,
   toHex,
+  fromHex,
+  encode,
+  decode,
   utf8,
   ID_PREFIX_BYTES,
   HASH_BYTES,
@@ -498,4 +501,62 @@ test('two scouts disagreeing is not a conflict — it is the point', () => {
   }
   assert.equal(store.currentRecords().length, 2, 'both opinions must survive');
   assert.deepEqual(store.conflicts(), []);
+});
+
+/* ----------------------------------------- validation that was not one --- */
+
+test('fromHex refuses invalid hex instead of decoding it to wrong bytes', () => {
+  // The old check was isNaN(parseInt(pair, 16)), which only catches a bad FIRST
+  // character: parseInt('1z', 16) is 1, parseInt('a ', 16) is 10. Half the
+  // malformed inputs decoded silently. This is what both conformance suites use
+  // to load every normative vector, so a mistyped vector was decoded to garbage
+  // and then asserted against.
+  assert.equal(toHex(fromHex('1a2b')), '1a2b');
+  assert.equal(fromHex('').length, 0);
+
+  for (const bad of ['1z', 'a ', 'zz', '0g', '1a2g', 'ab\n']) {
+    assert.throws(() => fromHex(bad), /invalid hex|odd length/, `accepted ${JSON.stringify(bad)}`);
+  }
+  // The specific case the old check let through, decoding to 0x01.
+  assert.throws(() => fromHex('1z'), /invalid hex character/);
+});
+
+test('an unpaired surrogate is refused rather than silently becoming U+FFFD', () => {
+  // TextEncoder replaces lone surrogates with U+FFFD without error, so the
+  // in-memory record would say one thing and the signed, hashed payload another
+  // — and two distinct strings collapsing to one encoding gives two different
+  // records the same record-id, which is the dedup key.
+  const lone = 'ok\uD800';
+  assert.throws(() => encode(lone), /unpaired surrogate/);
+  assert.throws(() => encode(new Map([[1, '\uDC00tail']])), /unpaired surrogate/);
+
+  // A properly paired surrogate is ordinary text and must still encode.
+  assert.equal(decode(encode('rocket \u{1F680}')), 'rocket \u{1F680}');
+});
+
+test('a record whose packed match the unpacker rejects is not admitted', () => {
+  // validateRecord bounded match at 0..0xffffffff under a comment claiming that
+  // stopped values the unpacker cannot represent. It did not: unpackMatch also
+  // needs a known level code and a non-zero number, so these were all valid
+  // records that then threw MatchKeyError out of matchLabel — aborting a whole
+  // export or report over one record rather than degrading.
+  const mesh = new TestMesh();
+  const base = {
+    eventKey: EVENT,
+    team: 8793,
+    scout: mesh.scout('ada', EVENT),
+    schema: 'demo.scout.v1',
+    body: utf8('x'),
+    sealedAt: 1_800_000_000_000,
+  };
+
+  for (const bad of [0, 6 << 24, (1 << 24) | 0]) {
+    assert.throws(
+      () => makeRecord({ ...base, match: bad }),
+      /not a valid packed match/,
+      `accepted packed match ${bad}`,
+    );
+  }
+  // And the ordinary case still works.
+  assert.ok(makeRecord({ ...base, match: MATCH }));
 });
