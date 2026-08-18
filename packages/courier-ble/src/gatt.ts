@@ -183,9 +183,22 @@ export class GattLink implements Link {
         settled = true;
         resolve(false);
       }, this.#readyTimeout);
-      // `unref` keeps a pending timeout from holding the process open; absent
-      // in browsers, hence the guard.
-      (timer as unknown as { unref?: () => void }).unref?.();
+      // Deliberately NOT unref'd, and this is load-bearing.
+      //
+      // The timer's whole job is to fire and hand back `false` so a caller
+      // never hangs on a peer that has gone away. Unref'ing it means that when
+      // it is the only thing left in the event loop — which is exactly the
+      // stalled-peer case it exists for — the loop drains, the timer never
+      // fires, and the await hangs forever. The guard turns itself off precisely
+      // when it is needed.
+      //
+      // It cost twelve red CI runs on Node 22 to notice: on Node 22 the test
+      // runner reports "Promise resolution is still pending but the event loop
+      // has already resolved" and cancels the rest of the file. Node 24 happened
+      // to keep a handle alive and hid it.
+      //
+      // It cannot hold the process open for longer than `readyTimeout`, because
+      // the success path clears it.
 
       this.#readyResolvers.push(() => {
         if (settled) return;
