@@ -16,6 +16,23 @@
 import { type GattTransport } from '@courier/ble';
 import { toBase64, type CourierBlePlugin } from './definitions.ts';
 
+/**
+ * Packets this transport will hold before telling the sender to wait.
+ *
+ * Deep enough to keep the bridge pipelined — each `write()` is an async round
+ * trip to native, so a depth of one would serialise the whole frame on bridge
+ * latency. Shallow enough that a peer which has stopped draining is noticed
+ * within one bound rather than after a whole frame: at MIN_MTU a packet carries
+ * 15 bytes, so 32 packets is 480 bytes in flight, and at the preferred MTU it
+ * is 7.6 kB.
+ *
+ * CHOSEN, not measured. The right depth is one connection interval's worth of
+ * packets, and that needs two real devices to know — see docs/MEASUREMENTS.md
+ * §6. What matters here is that a bound exists at all; the exact value only
+ * trades throughput against how fast a stall is spotted.
+ */
+export const MAX_PENDING_WRITES = 32;
+
 export class CapacitorTransportError extends Error {
   constructor(message: string) {
     super(message);
@@ -27,10 +44,17 @@ export class CapacitorTransportError extends Error {
  * One GATT connection, presented as the transport @courier/ble expects.
  *
  * `write` is synchronous in the GattTransport interface but asynchronous across
- * the Capacitor bridge, so this maintains a small outbound queue: a packet is
- * accepted optimistically, and a `false` from native re-queues it and waits for
- * `readyToWrite`. That keeps backpressure semantics identical to the simulated
- * transport, which is what makes the simulator worth anything.
+ * the Capacitor bridge, so this maintains a bounded outbound queue: a packet is
+ * accepted optimistically and drained across the bridge, and a `false` from
+ * native re-queues it at the head to wait for `readyToWrite`.
+ *
+ * The queue is BOUNDED, and that is load-bearing rather than tidy. `GattLink`
+ * only applies backpressure when `write()` returns false; an always-true
+ * transport means the link never stalls, its stall timeout can never fire, and
+ * the "a stalled peer times out instead of hanging the sync forever" guarantee
+ * holds only against the simulator. It also means a peer that stops draining
+ * accumulates packets with nothing to stop it. Returning false at the bound is
+ * what makes the tested behaviour and the shipped behaviour the same thing.
  */
 export class PluginGattTransport implements GattTransport {
   readonly label: string;
@@ -48,6 +72,17 @@ export class PluginGattTransport implements GattTransport {
   /** Packets that arrived before a handler was attached. */
   readonly #inbound: Uint8Array[] = [];
   #draining = false;
+  /** A drain was asked for while one was mid-flight. */
+  #drainAgain = false;
+  /**
+   * We refused a write and owe the sender a wake-up.
+   *
+   * Recorded at the moment of refusal rather than sampled when a drain starts.
+   * A drain that began while the queue was short would otherwise finish, see it
+   * was never full at ITS entry, and skip the wake — leaving GattLink on its
+   * stall timeout even though there is room now.
+   */
+  #owesReady = false;
 
   constructor(plugin: CourierBlePlugin, peerId: string, mtu: number) {
     this.#plugin = plugin;
@@ -82,6 +117,10 @@ export class PluginGattTransport implements GattTransport {
 
   signalReady(): void {
     if (this.#closed) return;
+    // Drain first: native has taken something, so the head of the queue may go
+    // now. #drain may also fire the ready handler itself if our own bound was
+    // the thing blocking — one spurious extra wake is harmless, a missing one
+    // costs a full stall timeout.
     void this.#drain();
     this.#readyHandler?.();
   }
@@ -102,7 +141,15 @@ export class PluginGattTransport implements GattTransport {
 
   write(packet: Uint8Array): boolean {
     if (this.#closed) return false;
-    // Queue unconditionally. Anything already waiting must go first, or packets
+    // Refuse at the bound rather than queueing forever. GattLink reads a false
+    // return as backpressure and waits on its stall timeout, which is the only
+    // thing that ever notices a peer that has stopped draining.
+    if (this.#outbound.length >= MAX_PENDING_WRITES) {
+      this.#owesReady = true;
+      void this.#drain();
+      return false;
+    }
+    // Always append. Anything already waiting must go first, or packets
     // reorder — and the reassembler discards out-of-order packets rather than
     // splicing them into a corrupt frame.
     this.#outbound.push(packet.slice());
@@ -111,25 +158,46 @@ export class PluginGattTransport implements GattTransport {
   }
 
   async #drain(): Promise<void> {
-    if (this.#draining || this.#closed) return;
+    if (this.#closed) return;
+    if (this.#draining) {
+      // A drain is mid-flight, awaiting a bridge round trip. Dropping this
+      // request loses the wake-up: the in-flight pass finishes with the
+      // `accepted: false` it was already holding, nothing retries, and the
+      // queue sits full forever. Record it and let the running pass loop.
+      this.#drainAgain = true;
+      return;
+    }
     this.#draining = true;
     try {
-      while (this.#outbound.length > 0 && !this.#closed) {
-        const next = this.#outbound[0]!;
-        const { accepted } = await this.#plugin.write({
-          peerId: this.#peerId,
-          packet: toBase64(next),
-        });
-        // `accepted: false` means native did NOT take it. The packet stays at
-        // the head of the queue and waits for readyToWrite.
-        if (!accepted) return;
-        this.#outbound.shift();
-      }
+      do {
+        this.#drainAgain = false;
+        while (this.#outbound.length > 0 && !this.#closed) {
+          const next = this.#outbound[0]!;
+          const { accepted } = await this.#plugin.write({
+            peerId: this.#peerId,
+            packet: toBase64(next),
+          });
+          // `accepted: false` means native did NOT take it. The packet stays at
+          // the head of the queue and waits for readyToWrite.
+          if (!accepted) break;
+          this.#outbound.shift();
+        }
+        // Anything that asked for a drain while we were awaiting gets served
+        // by this loop rather than being silently dropped.
+      } while (this.#drainAgain && !this.#closed);
     } catch {
       // A bridge failure is a disconnect from this layer's point of view.
       this.signalDisconnect();
     } finally {
       this.#draining = false;
+      // Wake the sender ourselves when OUR bound was what pushed back. Native
+      // emits readyToWrite only after IT refused something, so if the refusal
+      // came from this queue no such event is coming, and the link would sit on
+      // its stall timeout once per frame for no reason.
+      if (this.#owesReady && !this.#closed && this.#outbound.length < MAX_PENDING_WRITES) {
+        this.#owesReady = false;
+        this.#readyHandler?.();
+      }
     }
   }
 
