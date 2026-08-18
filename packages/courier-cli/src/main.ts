@@ -14,6 +14,7 @@ import { Workspace } from './workspace.ts';
 import * as cmd from './commands.ts';
 import { picklist } from './picklist.ts';
 import { scouts } from './scouts.ts';
+import { extract, type ExtractFormat } from './extract.ts';
 
 /** Parse a comma or space separated team list. Throws on anything that is not one. */
 function parseTeams(text: string | undefined): number[] {
@@ -48,6 +49,7 @@ const USAGE = `courier — move FRC scouting data between devices, by file
   courier picklist --schema <f> --field <f> --alliance <teams>
                                             rank the board from your own scouting
   courier scouts --schema <f> --field <f>    who is drifting, from peer disagreement
+  courier extract --schema <f> [--out <f>]  every record as CSV or JSON
 
 Options:
   --dir <path>        workspace directory (default .courier)
@@ -57,6 +59,13 @@ Options:
 function defaultProfiles() {
   const url = new URL('../../courier-bridge/profiles/bridge_profiles.json', import.meta.url);
   return loadProfileSet(JSON.parse(readFileSync(fileURLToPath(url), 'utf8')));
+}
+
+function takeFlag(argv: string[], name: string): boolean {
+  const i = argv.indexOf(name);
+  if (i === -1) return false;
+  argv.splice(i, 1);
+  return true;
 }
 
 function takeOption(argv: string[], name: string): string | undefined {
@@ -77,6 +86,9 @@ export async function run(argv: string[]): Promise<cmd.CommandResult> {
   const exclude = takeOption(args, '--exclude');
   const picksBetween = takeOption(args, '--picks-between');
   const minObservations = takeOption(args, '--min-observations');
+  const format = takeOption(args, '--format');
+  const out = takeOption(args, '--out');
+  const decodedOnly = takeFlag(args, '--decoded-only');
   const ws = new Workspace(dir);
   const command = args.shift();
 
@@ -150,6 +162,29 @@ export async function run(argv: string[]): Promise<cmd.CommandResult> {
       return scouts(ws, { schemaPath, field });
     }
 
+    case 'extract': {
+      if (!schemaPath) {
+        return {
+          text:
+            'usage: courier extract --schema <schema.json> [--format csv|json] [--out <file>]\n\n' +
+            'Writes every record you hold, decoded with your own schema. With no --out the\n' +
+            'data goes to stdout so it pipes; the notes go to stderr so they cannot corrupt it.\n\n' +
+            'Courier moves your data. What you do with it afterwards is your business — this is\n' +
+            'the command that hands it back rather than making you live inside these two reports.',
+          code: 1,
+        };
+      }
+      if (format !== undefined && format !== 'csv' && format !== 'json') {
+        return { text: `--format must be csv or json, not "${format}"`, code: 1 };
+      }
+      return extract(ws, {
+        schemaPath,
+        format: format as ExtractFormat | undefined,
+        out,
+        decodedOnly,
+      });
+    }
+
     case 'picklist': {
       if (!schemaPath || !field || !alliance) {
         return {
@@ -197,6 +232,8 @@ if (invokedDirectly) {
   try {
     const result = await run(process.argv.slice(2));
     process.stdout.write(result.text + '\n');
+    // Notes that would corrupt piped data if they went to stdout.
+    if (result.stderr) process.stderr.write(result.stderr + '\n');
     process.exitCode = result.code;
   } catch (err) {
     process.stderr.write(`courier: ${(err as Error).message}\n`);
