@@ -144,8 +144,18 @@ export async function run(argv: string[]): Promise<cmd.CommandResult> {
       need(1, 'import <in.courier>');
       return cmd.importBundle(ws, args[0]!);
 
-    case 'report':
-      return cmd.report(ws, args[0] ? Number(args[0]) : undefined);
+    case 'report': {
+      // `Number('abc')` is NaN, and NaN !== every team, so an unparseable
+      // argument used to filter out every record and report an empty event at
+      // exit 0 — a plausible-looking summary of nothing. parseTeams already
+      // exists to refuse exactly this for --alliance.
+      if (args[0] !== undefined) {
+        const [team] = parseTeams(args[0]);
+        if (team === undefined) throw new Error(`"${args[0]}" is not a team number`);
+        return cmd.report(ws, team);
+      }
+      return cmd.report(ws, undefined);
+    }
 
     case 'verify':
       return cmd.verifyStore(ws);

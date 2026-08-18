@@ -19,6 +19,7 @@ import {
   type CborValue,
 } from './cbor.ts';
 import { hash256, timingSafeEqual, toHex, HASH_BYTES, SCOUT_PSEUDONYM_BYTES } from './hash.ts';
+import { unpackMatch } from './matchkey.ts';
 
 export const RECORD_VERSION = 1;
 
@@ -41,15 +42,37 @@ export const F = {
 /** Reserved in v1; a v2 record may carry these. Never reuse for anything else. */
 export const RESERVED_FIELDS = new Set<number>([13 /* hlc */, 14 /* enc */]);
 
+/**
+ * Bounds from spec/courier-record.cddl. Text bounds are in BYTES.
+ *
+ * CDDL `.size` on a `tstr` counts encoded bytes, and `String.length` counts
+ * UTF-16 code units. They agree only for ASCII. Sixteen U+00F8 characters are
+ * sixteen code units and thirty-two bytes, so measuring the wrong one lets this
+ * implementation emit a record that its own normative spec rejects -- and a
+ * conformant third-party parser would refuse it.
+ */
 export const LIMITS = {
   EVENT_KEY_MIN: 4,
   EVENT_KEY_MAX: 16,
+  TEAM_MIN: 1,
   TEAM_MAX: 99999,
   SCHEMA_MIN: 1,
   SCHEMA_MAX: 64,
   REVISION_MAX: 65535,
   BODY_MAX: 65536,
+  /**
+   * Largest integer a JavaScript number holds exactly.
+   *
+   * Past this, sealedAt silently rounds. record-id is derived from it, so two
+   * devices given the same observation would disagree on its identity -- and
+   * dedup is record-id, so both copies survive and the double-scouting
+   * statistics see a robot watched twice by one scout.
+   */
+  SEALED_AT_MAX: Number.MAX_SAFE_INTEGER,
 } as const;
+
+/** Encoded length, which is what the CDDL bounds constrain. */
+const utf8Length = (s: string): number => new TextEncoder().encode(s).length;
 
 export interface CourierRecord {
   readonly version: number;
@@ -136,27 +159,51 @@ export function validateRecord(r: CourierRecord): void {
   if (r.version !== RECORD_VERSION) {
     throw new RecordError(`unsupported record version ${r.version}`);
   }
-  if (r.eventKey.length < LIMITS.EVENT_KEY_MIN || r.eventKey.length > LIMITS.EVENT_KEY_MAX) {
+  const eventKeyBytes = utf8Length(r.eventKey);
+  if (eventKeyBytes < LIMITS.EVENT_KEY_MIN || eventKeyBytes > LIMITS.EVENT_KEY_MAX) {
     throw new RecordError(
-      `event key "${r.eventKey}" must be ${LIMITS.EVENT_KEY_MIN}..${LIMITS.EVENT_KEY_MAX} characters`,
+      `event key "${r.eventKey}" must encode to ${LIMITS.EVENT_KEY_MIN}..` +
+        `${LIMITS.EVENT_KEY_MAX} bytes (it is ${eventKeyBytes})`,
     );
   }
   // Bounded at 32 bits by the packing scheme's shift widths (spec §2). Without
   // this the record type admits values the match unpacker cannot represent.
+  // Delegating to unpackMatch rather than re-deriving the bound. The old check
+  // was `0 <= match <= 0xffffffff` under a comment claiming it stopped values
+  // the unpacker cannot represent — it did not. unpackMatch also requires a
+  // known level code and a non-zero number, so `0`, `6 << 24`, and anything with
+  // a zero match number were all admissible records that then threw
+  // MatchKeyError out of matchLabel — aborting an entire export or report over
+  // one record instead of degrading.
+  try {
+    unpackMatch(r.match);
+  } catch (err) {
+    throw new RecordError(`match ${r.match} is not a valid packed match: ${(err as Error).message}`);
+  }
   if (!Number.isInteger(r.match) || r.match < 0 || r.match > 0xffffffff) {
     throw new RecordError(`packed match ${r.match} is not a 32-bit unsigned integer`);
   }
-  if (!Number.isInteger(r.team) || r.team < 1 || r.team > LIMITS.TEAM_MAX) {
-    throw new RecordError(`team ${r.team} out of range 1..${LIMITS.TEAM_MAX}`);
+  if (!Number.isInteger(r.team) || r.team < LIMITS.TEAM_MIN || r.team > LIMITS.TEAM_MAX) {
+    throw new RecordError(`team ${r.team} out of range ${LIMITS.TEAM_MIN}..${LIMITS.TEAM_MAX}`);
   }
   if (r.scout.length !== SCOUT_PSEUDONYM_BYTES) {
     throw new RecordError(`scout pseudonym must be ${SCOUT_PSEUDONYM_BYTES} bytes`);
   }
-  if (r.schema.length < LIMITS.SCHEMA_MIN || r.schema.length > LIMITS.SCHEMA_MAX) {
-    throw new RecordError(`schema id must be ${LIMITS.SCHEMA_MIN}..${LIMITS.SCHEMA_MAX} characters`);
+  const schemaBytes = utf8Length(r.schema);
+  if (schemaBytes < LIMITS.SCHEMA_MIN || schemaBytes > LIMITS.SCHEMA_MAX) {
+    throw new RecordError(
+      `schema id must encode to ${LIMITS.SCHEMA_MIN}..${LIMITS.SCHEMA_MAX} bytes ` +
+        `(it is ${schemaBytes})`,
+    );
   }
-  if (!Number.isInteger(r.sealedAt) || r.sealedAt < 0) {
-    throw new RecordError('sealedAt must be a non-negative integer');
+  if (!Number.isInteger(r.sealedAt) || r.sealedAt < 0 || r.sealedAt > LIMITS.SEALED_AT_MAX) {
+    // The upper bound is not decoration. Number.isInteger(2 ** 53) is true, so
+    // without it a value past the safe range passes, silently rounds, and
+    // changes record-id -- which is the dedup key, so the same observation
+    // arrives twice under two identities and reads as double-scouting.
+    throw new RecordError(
+      `sealedAt must be an integer in 0..${LIMITS.SEALED_AT_MAX} (got ${r.sealedAt})`,
+    );
   }
   if (!Number.isInteger(r.revision) || r.revision < 0 || r.revision > LIMITS.REVISION_MAX) {
     throw new RecordError(`revision ${r.revision} out of range 0..${LIMITS.REVISION_MAX}`);

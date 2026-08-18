@@ -43,13 +43,25 @@ export function toHex(b: Uint8Array): string {
   return s;
 }
 
+/**
+ * Parse hex, refusing anything that is not.
+ *
+ * The check used to be `Number.isNaN(parseInt(pair, 16))`, which only catches a
+ * bad FIRST character: parseInt('1z', 16) is 1 and parseInt('a ', 16) is 10, so
+ * half the malformed inputs decoded to plausible-but-wrong bytes instead of
+ * throwing. That matters more here than it looks — this is what both conformance
+ * suites use to load every normative test vector, so a corrupted or mistyped
+ * vector file was decoded to garbage and then asserted against.
+ */
 export function fromHex(s: string): Uint8Array {
   if (s.length % 2 !== 0) throw new Error('hex string has odd length');
+  if (!/^[0-9a-fA-F]*$/.test(s)) {
+    const bad = s.search(/[^0-9a-fA-F]/);
+    throw new Error(`invalid hex character ${JSON.stringify(s[bad])} at offset ${bad}`);
+  }
   const out = new Uint8Array(s.length / 2);
   for (let i = 0; i < out.length; i++) {
-    const b = Number.parseInt(s.slice(i * 2, i * 2 + 2), 16);
-    if (Number.isNaN(b)) throw new Error(`invalid hex at offset ${i * 2}`);
-    out[i] = b;
+    out[i] = Number.parseInt(s.slice(i * 2, i * 2 + 2), 16);
   }
   return out;
 }

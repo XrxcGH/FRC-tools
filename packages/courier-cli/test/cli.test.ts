@@ -546,3 +546,25 @@ test('export refuses rather than overwriting a backup with an empty bundle', () 
     s.cleanup();
   }
 });
+
+test('report refuses a team argument that is not a team number', async () => {
+  // Number('abc') is NaN and NaN !== every team, so this used to filter out
+  // every record and print a plausible-looking summary of an empty event at
+  // exit 0.
+  const s = scratch();
+  try {
+    const wsDir = join(s.dir, 'ws');
+    const ws = new Workspace(wsDir);
+    cmd.init(ws, EVENT, 'pit-laptop');
+    const scans = join(s.dir, 'scans.txt');
+    writeFileSync(scans, [tsv('ada', 1, 8793, 3), tsv('bo', 1, 9143, 4)].join('\n'));
+    cmd.ingest(ws, scans, PROFILES);
+
+    await assert.rejects(() => run(['report', 'frc8793', '--dir', wsDir]), /not a team number/);
+    // And the real forms still work.
+    assert.equal((await run(['report', '8793', '--dir', wsDir])).code, 0);
+    assert.equal((await run(['report', '--dir', wsDir])).code, 0);
+  } finally {
+    s.cleanup();
+  }
+});

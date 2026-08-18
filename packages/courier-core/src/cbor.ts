@@ -127,6 +127,19 @@ function encodeInto(w: Writer, value: CborValue): void {
     return;
   }
   if (typeof value === 'string') {
+    // An unpaired surrogate is REFUSED, not encoded. TextEncoder replaces lone
+    // surrogates with U+FFFD without error, which would mean the in-memory
+    // record says one thing and the signed, hashed payload says another — and
+    // two distinct strings collapsing to one encoding gives two different
+    // records the same record-id, which is the dedup key. spec/canonical-cbor.md
+    // §1 rule 7 forbids them; nothing enforced it, since validateRecord checks
+    // only length.
+    if (/[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/.test(value)) {
+      throw new CborError(
+        'text string contains an unpaired surrogate, which cannot be encoded as UTF-8 ' +
+          'without substituting U+FFFD and changing the record id',
+      );
+    }
     // NFC-normalise so two spellings of "the same" string cannot produce two
     // different record ids.
     const bytes = UTF8_ENCODER.encode(value.normalize('NFC'));
