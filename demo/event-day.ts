@@ -537,7 +537,12 @@ res.residuals.forEach((r, i) => {
 
 const drowsyId = toHex(mintScoutPseudonym(`scout-${DROWSY_SCOUT}`, EVENT, meshKey));
 claim('the drowsy scout is flagged', alarms.has(drowsyId));
-claim('nobody else is flagged', alarms.size <= 1);
+// Identity, not cardinality. `alarms.size <= 1` passes when the ONE person
+// flagged is an innocent scout — the ledger line would print OK while
+// reporting the opposite of the truth. The adjacent claim catches that case
+// too, so the run still exits non-zero, but a claim that lies in the affirmative
+// is exactly the kind of reassurance this ledger exists to not give.
+claim('nobody else is flagged', [...alarms.keys()].every((s) => s === drowsyId));
 console.log();
 if (alarms.size === 0) {
   console.log(warn('  Nobody flagged -- the injected drift was too mild for these constants.'));

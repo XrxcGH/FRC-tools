@@ -51,4 +51,4 @@ The review found three claims stated more strongly than the evidence supports, w
 1. **Get it to compile.** This is the gating step and nothing here has seen a compiler. Expect the first build to find typos in delegate and callback signatures.
 2. Work the twelve-item verification list in [`android/README.md`](android/README.md) and the equivalent in [`ios/README.md`](ios/README.md), which record what could not be checked without hardware — including the per-device-vs-per-server ambiguity in `onNotificationSent` and the MTU-before-discovery ordering.
 
-And when the radio numbers finally exist, revisit [`docs/MEASUREMENTS.md`](../../docs/MEASUREMENTS.md) §5. `LEAF_THRESHOLD` in the reconciliation layer is derived from an *assumed* ~1.8 s connection setup, and that assumption becomes checkable the moment two real devices talk.
+And when the radio numbers finally exist, revisit [`docs/MEASUREMENTS.md`](../../docs/MEASUREMENTS.md) §6. `LEAF_THRESHOLD` in the reconciliation layer is derived from an *assumed* ~1.8 s connection setup, and that assumption becomes checkable the moment two real devices talk.

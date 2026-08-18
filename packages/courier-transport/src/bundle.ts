@@ -119,7 +119,16 @@ export function readBundle(bytes: Uint8Array): Bundle {
   };
 }
 
-/** Read the header without materialising every envelope. For a "should I copy this?" prompt. */
+/**
+ * Read the header fields, for a "should I copy this?" prompt.
+ *
+ * NOT a cheap header-only decode, though it used to say it was: the body calls
+ * `readBundle`, which CBOR-decodes the whole buffer and builds a Uint8Array per
+ * record before this function throws the envelopes away. Cost is the same as
+ * reading the bundle properly. Stated because the old comment sold the opposite
+ * cost model, and a caller sizing a prompt around it would be wrong by the whole
+ * file.
+ */
 export function peekBundle(bytes: Uint8Array): BundleMeta {
   const b = readBundle(bytes);
   return {

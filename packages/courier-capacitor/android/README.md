@@ -241,11 +241,13 @@ devices.
 5. **The negotiated MTU on real hardware.** 247 is requested; what is granted
    varies by chipset and by peer, and the plugin uses whatever it gets. No
    throughput figure anywhere in this repository comes from a radio.
-6. **Timing constants.** The 20 s connect timeout, the 5 s GATT service
+6. **Timing constants.** The 15 s connect timeout, the 5 s GATT service
    registration timeout, the 500 ms window used to decide a scan started
    successfully, the 600 ms pause before the status-133 retry, the 25 ms
-   ready-to-write hint, and the 5 s per-peer discovery throttle are all judgement
-   calls. None is measured.
+   ready-to-write hint are all judgement calls. None is measured. (The 5 s
+   per-peer discovery throttle that used to be listed here no longer exists —
+   NATIVE-STATUS.md fix #10 replaced it with one report per device per scan, to
+   match iOS.)
 7. **That an inbound central's MTU is known by the time it subscribes.** The
    argument is that the Courier central negotiates the MTU before writing the
    CCCD, so the ordering holds between two Courier devices. It has not been

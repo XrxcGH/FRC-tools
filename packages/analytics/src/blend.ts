@@ -318,7 +318,7 @@ export interface CusumState {
  * `packages/analytics/bench/cusum-operating-point.ts` reproduces the table.
  *
  * At 0.5 / 4 a clean scout alarms with probability 0.24 over the ~48 paired
- * observations of a two-day event. With six scouts that is a 78% chance of
+ * observations of a two-day event. With six scouts that is an 81% chance of
  * accusing somebody who did nothing wrong, EVERY event. The textbook figure
  * (in-control run length ~168) is not wrong, it is answering a different
  * question: teams run their scouts in parallel and care about the chance that
@@ -341,7 +341,12 @@ export const CUSUM_THRESHOLD = 5;
  * numbers drift systematically low. A per-match outlier test never fires on that
  * because no single match is extreme; the drift only shows up cumulatively.
  *
- * The constants alarm after roughly seven consecutive one-sigma-biased matches
+ * A noiseless one-sigma bias adds 0.25 per observation, so it needs 21 to cross
+ * the threshold; with real noise the bench measures a median of 11 and catches
+ * about four in five. A 1.5-sigma drift takes 7 noiseless, 5 with noise, and is
+ * caught essentially always. The mild case is deliberately slow — that is the
+ * price of the false-alarm rate — and the serious case is fast enough to re-task
+ * somebody mid-event, which is the operational claim that matters
  * — fast enough to re-task someone during an event, slow enough that a clean
  * scout is almost never accused. See CUSUM_SLACK for the measurement behind
  * them. They are still calibrated against SIMULATED drift, not against real
