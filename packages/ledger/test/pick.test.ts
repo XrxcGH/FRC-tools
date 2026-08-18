@@ -76,7 +76,11 @@ test('a picklist ranks the board and never lists your own alliance', () => {
   assert.match(r.text, /2027mose — picklist for 100/);
   assert.ok(!/^\s+\d+\s+100\s/m.test(r.text), 'the captain is not a candidate');
   assert.match(r.text, /5 on the board/);
-  assert.match(r.text, /floor = 20th percentile/);
+  // The Ledger fits contributions from official ALLIANCE totals, which cannot
+  // recover a team's match-to-match consistency — so this path prints the
+  // estimate-only legend rather than promising a bad-day range it cannot know.
+  assert.match(r.text, /estimate of their AVERAGE/);
+  assert.ok(!/on a bad day/.test(r.text));
 });
 
 test('excluded teams are gone from the list entirely', () => {

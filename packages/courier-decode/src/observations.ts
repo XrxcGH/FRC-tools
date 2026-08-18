@@ -146,7 +146,16 @@ export const BridgeSchemas: Readonly<Record<string, BodySchema>> = {
 export interface TeamEstimateLike {
   readonly team: number;
   readonly mean: number;
+  /** Standard error of the mean: how unsure we are of their average. */
   readonly sigma: number;
+  /**
+   * Match-to-match standard deviation: how much the robot itself varies.
+   *
+   * Carried separately because the picklist's floor needs THIS, not sigma. A
+   * floor built from the standard error claims a coin-flip robot gets steadier
+   * the more you scout it.
+   */
+  readonly spread: number;
   readonly observations: number;
 }
 
@@ -216,6 +225,9 @@ export function teamEstimatesFrom(
       team,
       mean,
       sigma: Math.max(sd / Math.sqrt(n), 1e-6),
+      // `sd` is already the shrunk match-to-match spread; it was only ever
+      // divided by sqrt(n) on the way into sigma.
+      spread: sd,
       observations: n,
     });
   }

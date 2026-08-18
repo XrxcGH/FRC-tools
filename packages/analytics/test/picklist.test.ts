@@ -301,10 +301,57 @@ test('the printed form is readable off paper under time pressure', () => {
 
   assert.match(text, /#\s+team\s+total\s+floor\s+ceiling\s+risk/);
   assert.equal(text.split('\n').filter((l) => /^\s+\d+\s+\d+/.test(l)).length, 3);
-  assert.match(text, /floor = 20th percentile/, 'the column is explained, not assumed');
+  assert.match(text, /percentile/, 'the column is explained, not assumed');
   assert.match(text, /risk = chance this team is gone/);
   // The two column groups are on different scales; the header must separate them.
   assert.match(text, /this team alone/);
   assert.match(text, /alliance total = your alliance WITH this pick/);
-  assert.match(text, /THIS TEAM alone, not the total/);
+  // These candidates carry no per-match spread, so the legend must say the
+  // floor describes our estimate of the average rather than a bad day.
+  assert.match(text, /estimate of their AVERAGE/);
+});
+
+test('with no per-match spread the legend refuses to claim a bad day', () => {
+  // The Ledger path fits contributions from official ALLIANCE totals, which
+  // cannot recover a team's match-to-match consistency. Saying "what you get on
+  // a bad day" there would be inventing it.
+  const ranked = rankPicklist({
+    candidates: [team(111, 30), team(222, 25)],
+    alliance: [team(8793, 30)],
+    picksBeforeYourNext: 0,
+    haveSecondPick: false,
+    rng: seededRng(1),
+  });
+  assert.equal(ranked[0]!.floorBasis, 'estimate-only');
+
+  const text = formatPicklist(ranked, 5);
+  assert.match(text, /estimate of their AVERAGE/);
+  assert.match(text, /does not tell you/);
+  assert.ok(!/on a bad day/.test(text), 'claimed a bad-day range it cannot compute');
+});
+
+test('ranking uses the estimate, not the single-match spread', () => {
+  // A wilder robot with the same average is not a better pick; it is the same
+  // expected value with more variance. Expected alliance value must not move
+  // just because spread went up, or the board would rank on volatility.
+  const base = { picksBeforeYourNext: 0, haveSecondPick: false, rng: seededRng(1) };
+  const tight = rankPicklist({
+    ...base,
+    candidates: [{ team: 111, mean: 30, sigma: 3, spread: 1 }],
+    alliance: [{ team: 8793, mean: 30, sigma: 3, spread: 1 }],
+  });
+  const wild = rankPicklist({
+    ...base,
+    candidates: [{ team: 111, mean: 30, sigma: 3, spread: 25 }],
+    alliance: [{ team: 8793, mean: 30, sigma: 3, spread: 1 }],
+  });
+
+  assert.ok(
+    Math.abs(tight[0]!.expectedValue - wild[0]!.expectedValue) < 1,
+    'spread leaked into the ranking',
+  );
+  assert.ok(
+    wild[0]!.ceiling - wild[0]!.floor > tight[0]!.ceiling - tight[0]!.floor,
+    'spread did not reach the floor/ceiling either',
+  );
 });

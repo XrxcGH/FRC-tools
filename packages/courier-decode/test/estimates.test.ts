@@ -14,6 +14,7 @@ import {
   DEFAULT_MIN_OBSERVATIONS,
   type DecodedRecord,
 } from '../src/index.ts';
+import { rankPicklist, seededRng } from '@courier/analytics';
 
 const rec = (team: number, match: number, values: Record<string, number | boolean | string>): DecodedRecord => ({
   team,
@@ -178,4 +179,72 @@ test('double-scouted matches both count — this is not a per-match average', ()
   const { estimates } = teamEstimatesFrom(records, 'teleop');
   assert.equal(estimates[0]!.observations, 3);
   assert.equal(estimates[0]!.mean, 20);
+});
+
+/* ------------------------------------------- what the picklist floor means */
+
+test('the floor separates a coin-flip robot from a metronome', () => {
+  // The defect these exist for. `sigma` is the standard error of the MEAN, and
+  // the picklist's floor/ceiling used to be its percentiles — so the column
+  // labelled "what you get on a bad day" described how sure we were of a team's
+  // AVERAGE instead.
+  //
+  // 111 alternates 0 and 60. On a bad day you get 0.
+  // 222 scores exactly 30 every time. On a bad day you get 30.
+  // The old table gave them floors of 24.1 and 24.9.
+  const records: DecodedRecord[] = [];
+  for (let m = 1; m <= 20; m++) records.push(rec(111, m, { teleop: m % 2 === 0 ? 60 : 0 }));
+  for (let m = 1; m <= 20; m++) records.push(rec(222, m, { teleop: 30 }));
+
+  const { estimates } = teamEstimatesFrom(records, 'teleop');
+  const a = estimates.find((e) => e.team === 111)!;
+  const b = estimates.find((e) => e.team === 222)!;
+  assert.equal(a.mean, b.mean, 'the fixture only works if the means match');
+  assert.ok(a.spread > b.spread * 2, 'the spreads must differ or nothing is being tested');
+
+  const ranked = rankPicklist({
+    candidates: [a, b].map((e) => ({ team: e.team, mean: e.mean, sigma: e.sigma, spread: e.spread })),
+    alliance: [{ team: 8793, mean: 30, sigma: 1, spread: 1 }],
+    picksBeforeYourNext: 0,
+    haveSecondPick: false,
+    rng: seededRng(1),
+  });
+
+  const flip = ranked.find((r) => r.team === 111)!;
+  const steady = ranked.find((r) => r.team === 222)!;
+  assert.ok(
+    steady.floor - flip.floor > 10,
+    `floors were ${flip.floor.toFixed(1)} and ${steady.floor.toFixed(1)} — indistinguishable`,
+  );
+  assert.ok(flip.ceiling > steady.ceiling, 'the coin-flip robot has no upside either');
+  assert.equal(flip.floorBasis, 'performance');
+});
+
+test('more scouting must not make an erratic robot look steadier', () => {
+  // The specific perversity of a standard-error floor: it shrinks with n, so
+  // scouting a coin-flip robot twice as hard claims it is twice as reliable.
+  const floorAfter = (matches: number): number => {
+    const records: DecodedRecord[] = [];
+    for (let m = 1; m <= matches; m++) records.push(rec(111, m, { teleop: m % 2 === 0 ? 60 : 0 }));
+    for (let m = 1; m <= matches; m++) records.push(rec(222, m, { teleop: 30 }));
+    const { estimates } = teamEstimatesFrom(records, 'teleop');
+    const ranked = rankPicklist({
+      candidates: estimates.map((e) => ({
+        team: e.team, mean: e.mean, sigma: e.sigma, spread: e.spread,
+      })),
+      alliance: [{ team: 8793, mean: 30, sigma: 1, spread: 1 }],
+      picksBeforeYourNext: 0,
+      haveSecondPick: false,
+      rng: seededRng(1),
+    });
+    return ranked.find((r) => r.team === 111)!.floor;
+  };
+
+  const few = floorAfter(6);
+  const many = floorAfter(40);
+  assert.ok(
+    Math.abs(many - few) < 12,
+    `floor moved from ${few.toFixed(1)} to ${many.toFixed(1)} on scouting volume alone`,
+  );
+  assert.ok(many < 20, `a 0-or-60 robot reported a floor of ${many.toFixed(1)}`);
 });
