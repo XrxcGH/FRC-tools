@@ -34,6 +34,22 @@ export interface AdmitResult {
   readonly reason?: string;
 }
 
+/**
+ * Two observations of one robot by one scout that the store had to choose between.
+ *
+ * Not a supersession — see `RecordStore.conflicts()`. The winner was picked by
+ * record-id bytes, so the operator needs to be told rather than reassured.
+ */
+export interface ObservationConflict {
+  readonly eventKey: string;
+  readonly match: number;
+  readonly team: number;
+  /** Scout pseudonym, hex. */
+  readonly scout: string;
+  readonly kept: Uint8Array;
+  readonly dropped: Uint8Array[];
+}
+
 export interface StoreStats {
   readonly records: number;
   readonly observations: number;
@@ -199,9 +215,85 @@ export class RecordStore {
     return out;
   }
 
-  /** How many records `currentRecords` leaves out as superseded. */
+  /** How many records `currentRecords` leaves out, for any reason. */
   supersededCount(): number {
     return this.#byId.size - this.currentRecords().length;
+  }
+
+  /**
+   * Same-scout observations that were resolved by a coin toss, not a correction.
+   *
+   * A scout who fixes an entry and re-prints the QR produces two scans. The
+   * Bridge seals both with `revision: 0` and `supersedes: null` — it has no way
+   * to know the second is a correction — so `currentForObservation` finds no
+   * supersede link, collapses by scout pseudonym, and breaks the tie with
+   * `compareRecords`, which at equal revision is bytewise record-id.
+   *
+   * That is a hash deciding which of two numbers a team believes, and it is NOT
+   * the same thing as an explicit correction. Reporting it as "superseded, the
+   * corrections are what you have" tells the operator the opposite of what
+   * happened whenever the loser was the correction — measured over 200 distinct
+   * seal times, the original wins about half the time.
+   *
+   * `sealedAt` decides it, which is worth naming given that this file states
+   * `sealedAt` is explicitly not trusted for ordering: two Bridges scanning the
+   * same two QR codes seal different bytes and can pick different winners.
+   *
+   * The store still resolves it, because analysis needs one number and an
+   * arbitrary-but-deterministic choice beats a crash. What it must not do is
+   * let the choice pass unmentioned.
+   */
+  conflicts(): ObservationConflict[] {
+    const out: ObservationConflict[] = [];
+
+    for (const key of [...this.#byObservation.keys()].sort()) {
+      const bucket = this.#byObservation.get(key)!;
+      const first = bucket[0];
+      if (!first) continue;
+      const { eventKey, match, team } = first.record;
+      const all = this.forObservation(eventKey, match, team);
+
+      const byIdLocal = new Map<string, StoredRecord>();
+      for (const s of all) byIdLocal.set(toHex(s.recordId), s);
+      const superseded = new Set<string>();
+      for (const s of all) {
+        if (!s.record.supersedes) continue;
+        const target = byIdLocal.get(toHex(s.record.supersedes));
+        if (!target) continue;
+        if (toHex(target.record.scout) !== toHex(s.record.scout)) continue;
+        superseded.add(toHex(s.record.supersedes));
+      }
+
+      const byScout = new Map<string, StoredRecord[]>();
+      for (const s of all) {
+        if (superseded.has(toHex(s.recordId))) continue;
+        const scout = toHex(s.record.scout);
+        const list = byScout.get(scout);
+        if (list) list.push(s);
+        else byScout.set(scout, [s]);
+      }
+
+      for (const [scout, rivals] of byScout) {
+        if (rivals.length < 2) continue;
+        const sorted = [...rivals].sort((a, b) => compareRecords(b.record, a.record));
+        const kept = sorted[0]!;
+        // Identical bodies are not a conflict: whichever survives says the same
+        // thing, which is the routine double-submit of an unchanged scan.
+        const dropped = sorted
+          .slice(1)
+          .filter((s) => toHex(s.record.bodyHash) !== toHex(kept.record.bodyHash));
+        if (dropped.length === 0) continue;
+        out.push({
+          eventKey,
+          match,
+          team,
+          scout,
+          kept: kept.recordId,
+          dropped: dropped.map((s) => s.recordId),
+        });
+      }
+    }
+    return out;
   }
 
   stats(): StoreStats {

@@ -30,6 +30,7 @@ import {
   seededRng,
   type TeamEstimate,
 } from '@courier/analytics';
+import { matchLabel } from '@courier/core';
 import { Workspace } from './workspace.ts';
 import type { CommandResult } from './commands.ts';
 
@@ -71,6 +72,11 @@ export function picklist(ws: Workspace, args: PicklistArgs): CommandResult {
   // fix as two matches. Both numbers look plausible, so nothing catches it.
   const stored = store.currentRecords();
   const superseded = store.size - stored.length;
+  // A supersede pointer is a correction; a same-scout tie broken on record-id
+  // bytes is not, and calling both "superseded" tells the operator the opposite
+  // of what happened when the loser was the better number.
+  const conflicts = store.conflicts();
+  const droppedByTie = conflicts.reduce((n, c) => n + c.dropped.length, 0);
   const report = registry.decodeAll(stored);
 
   const gaps = describeGaps(report, stored.length);
@@ -154,7 +160,9 @@ export function picklist(ws: Workspace, args: PicklistArgs): CommandResult {
   const lines: string[] = [
     `${mesh.eventKey} — picklist for ${args.alliance.join(' + ')}, on "${args.field}"`,
     `${report.records.length} decoded record(s), ${estimates.length} team(s) with at least ${minObs}` +
-      (superseded > 0 ? `, ${superseded} superseded revision(s) excluded` : ''),
+      (superseded - droppedByTie > 0
+        ? `, ${superseded - droppedByTie} superseded revision(s) excluded`
+        : ''),
     '',
     formatPicklist(ranked, args.limit ?? 20),
     '',
@@ -163,6 +171,17 @@ export function picklist(ws: Workspace, args: PicklistArgs): CommandResult {
   // Everything the numbers do NOT include, before the contingencies rather than
   // after, because that is the part a reader skips.
   if (gaps) lines.push(gaps, '');
+  if (droppedByTie > 0) {
+    lines.push(
+      `${droppedByTie} observation(s) had two scans from the same scout with neither marked a`,
+      `correction. One was kept per robot, chosen by record-id — so a team's mean here may`,
+      `rest on the earlier number. Affected: ` +
+        conflicts.slice(0, 6).map((c) => `${c.team} in ${matchLabel(c.match)}`).join(', ') +
+        (conflicts.length > 6 ? `, and ${conflicts.length - 6} more` : '') +
+        '.',
+      '',
+    );
+  }
   if (thin.length > 0) {
     lines.push(
       `${thin.length} team(s) omitted for fewer than ${minObs} observations: ` +

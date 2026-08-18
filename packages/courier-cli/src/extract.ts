@@ -161,8 +161,29 @@ export function extract(ws: Workspace, args: ExtractArgs): CommandResult {
   if (args.out) {
     notes.push(`Wrote ${rows.length} row(s) to ${args.out} as ${format.toUpperCase()}.`);
   }
-  if (superseded > 0) {
-    notes.push(`${superseded} superseded revision(s) excluded — the corrections are what you have.`);
+  // Two very different reasons a record is missing from the current view, and
+  // conflating them told the operator the opposite of what happened. An
+  // explicit `supersedes` pointer IS a correction. A scout who re-scanned
+  // without one leaves two revision-0 heads, and the store breaks that tie on
+  // record-id bytes — a hash choosing which number the team believes.
+  const conflicts = store.conflicts();
+  const droppedByTie = conflicts.reduce((n, c) => n + c.dropped.length, 0);
+  const corrected = superseded - droppedByTie;
+
+  if (corrected > 0) {
+    notes.push(`${corrected} superseded revision(s) excluded — the corrections are what you have.`);
+  }
+  if (droppedByTie > 0) {
+    notes.push(
+      `${droppedByTie} record(s) came from a scout who submitted more than one observation of` +
+        ' the same robot without marking either as a correction. One was kept per robot,' +
+        ' CHOSEN BY RECORD-ID, so it may not be the later or the better one:',
+      ...conflicts
+        .slice(0, 8)
+        .map((c) => `  ${matchLabel(c.match)} team ${c.team}, scout ${c.scout.slice(0, 8)}`),
+      'Every one of them is still in the store and still syncs. To settle it, re-scan the' +
+        ' right value from a device that marks it as a revision.',
+    );
   }
   if (undecoded > 0) {
     notes.push(
