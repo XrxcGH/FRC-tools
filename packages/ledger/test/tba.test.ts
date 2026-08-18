@@ -6,6 +6,7 @@ import {
   PoliteClient,
   normaliseTeams,
   normaliseMatches,
+  normaliseFirstMatches,
   teamNumberFromKey,
   lastOfficialMatch,
   buildVenuePack,
@@ -238,4 +239,96 @@ test('a second snapshot in the freshness window costs the upstream nothing', asy
 
   assert.equal(fetch.hits.length, 2, 'still only the original two requests');
   assert.equal(polite.stats.freshCacheHits, 2);
+});
+
+/* --------------------------------------- practice matches are not quals -- */
+
+test('a practice match never becomes a qualification match', () => {
+  // The defect this exists for. `practice` mapped to the `qm` comp level, so
+  // Practice 1 packed to the same match id as Qualification 1. The practice
+  // score was written into the export as Q1's official total, fed to the OPR
+  // fit, and the reconciler blamed TBA for a roster mismatch it had invented.
+  // Practice matches numbered past the qual schedule were worse: they became
+  // qualification matches that never happened.
+  const { matches, skipped } = normaliseFirstMatches([
+    {
+      matchNumber: 1,
+      tournamentLevel: 'Qualification',
+      description: 'Qualification 1',
+      scoreRedFinal: 100,
+      scoreBlueFinal: 90,
+      postResultTime: '2027-03-06T10:00:00',
+      teams: [
+        { teamNumber: 11, station: 'Red1' }, { teamNumber: 12, station: 'Red2' },
+        { teamNumber: 13, station: 'Red3' }, { teamNumber: 21, station: 'Blue1' },
+        { teamNumber: 22, station: 'Blue2' }, { teamNumber: 23, station: 'Blue3' },
+      ],
+    },
+    {
+      matchNumber: 1,
+      tournamentLevel: 'Practice',
+      description: 'Practice 1',
+      scoreRedFinal: 5,
+      scoreBlueFinal: 3,
+      postResultTime: '2027-03-05T09:00:00',
+      teams: [
+        { teamNumber: 31, station: 'Red1' }, { teamNumber: 32, station: 'Red2' },
+        { teamNumber: 33, station: 'Red3' }, { teamNumber: 41, station: 'Blue1' },
+        { teamNumber: 42, station: 'Blue2' }, { teamNumber: 43, station: 'Blue3' },
+      ],
+    },
+  ]);
+
+  assert.equal(matches.length, 1, 'the practice row must not survive as a match');
+  assert.deepEqual(matches[0]!.red, [11, 12, 13], "the qualification roster was replaced");
+  assert.equal(matches[0]!.redScore, 100, 'the practice score became the official total');
+  assert.equal(matches[0]!.blueScore, 90);
+
+  // Dropped deliberately, and said so — not silently, and not as "unmapped".
+  assert.equal(skipped.length, 1);
+  assert.match(skipped[0]!, /Practice 1/);
+  assert.match(skipped[0]!, /not part of the official record/);
+});
+
+test('a practice match numbered past the schedule is not invented as a qual', () => {
+  const { matches, skipped } = normaliseFirstMatches([
+    {
+      matchNumber: 7,
+      tournamentLevel: 'Practice',
+      description: 'Practice 7',
+      scoreRedFinal: 4,
+      scoreBlueFinal: 2,
+      postResultTime: '2027-03-05T09:00:00',
+      teams: [
+        { teamNumber: 31, station: 'Red1' }, { teamNumber: 41, station: 'Blue1' },
+      ],
+    },
+  ]);
+  assert.deepEqual(matches, [], 'a qualification match that never happened was fabricated');
+  assert.equal(skipped.length, 1);
+});
+
+test('two rows packing to one match id drop BOTH, loudly', () => {
+  // The guard behind the guard: if a level mapping is ever wrong again, the
+  // collision must not be resolved by a Map's last-wins somewhere downstream.
+  // Keeping either row puts one match's score on another match's roster, and
+  // which one survives would depend on payload order.
+  const row = (red: number, blue: number, score: number) => ({
+    matchNumber: 1,
+    tournamentLevel: 'Qualification',
+    description: `made-up ${red}`,
+    scoreRedFinal: score,
+    scoreBlueFinal: score,
+    postResultTime: '2027-03-06T10:00:00',
+    teams: [
+      { teamNumber: red, station: 'Red1' },
+      { teamNumber: blue, station: 'Blue1' },
+    ],
+  });
+
+  const { matches, skipped } = normaliseFirstMatches([row(11, 21, 100), row(31, 41, 5)]);
+  assert.deepEqual(matches, [], 'a collision was silently resolved');
+  assert.equal(skipped.length, 1);
+  assert.match(skipped[0]!, /pack to the same match id/);
+  assert.match(skipped[0]!, /None were imported/);
 });
