@@ -11,6 +11,7 @@ export {
   MemoryLink,
   LinkError,
   LinkClosedError,
+  LinkStalledError,
   type Link,
   type Frame,
 } from './link.ts';

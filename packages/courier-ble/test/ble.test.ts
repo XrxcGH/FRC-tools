@@ -13,7 +13,7 @@ import {
   HEADER_BYTES,
   ATT_OVERHEAD,
 } from '../src/index.ts';
-import { syncBothEnds } from '@courier/transport';
+import { syncBothEnds, syncOverLink } from '@courier/transport';
 import {
   RecordStore,
   storesConverged,
@@ -258,4 +258,55 @@ test('the payload budget at each MTU is what the transport planning assumes', ()
   const frame = new Uint8Array(1200);
   assert.equal(split(frame, MIN_MTU, 0).length, Math.ceil(1200 / 15));
   assert.equal(split(frame, PREFERRED_MTU, 0).length, Math.ceil(1200 / 239));
+});
+
+/* --------------------------------------- a peer leaving is not an attack -- */
+
+test('a peer that disconnects mid-sync ends as peer-hung-up, not protocol-error', async () => {
+  // The defect this exists for. syncOverLink maps a closed link to the benign
+  // 'peer-hung-up' only when the thrown value is a LinkClosedError. GattLink.send
+  // threw a bare Error, so it fell through to the outer catch and came back as
+  // 'protocol-error' — which session.ts documents as "either corruption or a
+  // hostile peer". On an event floor a peer walking out of range is the
+  // ORDINARY case, and it was being reported as an attack. MemoryLink threw the
+  // right class all along, which is why only the BLE path lied.
+  const [ta, tb] = FakeGattTransport.pair('A', 'B');
+  const a = new GattLink(ta, { readyTimeoutMs: 200 });
+  const b = new GattLink(tb, { readyTimeoutMs: 200 });
+
+  const store = new RecordStore();
+  fill(store, 1, 20);
+
+  // B goes away before A gets to speak.
+  await b.close();
+
+  const out = await syncOverLink(store, resolver, a, 'initiator', {
+    receiveTimeoutMs: 500,
+  });
+  assert.equal(out.ending, 'peer-hung-up', `reported ${out.ending}: ${out.error ?? ''}`);
+  assert.equal(out.error, undefined, 'a peer leaving needs no error text');
+});
+
+test('a peer that stops draining ends as peer-silent, not protocol-error', async () => {
+  // The send-side twin of the receive-side silence guard. A stall is a peer
+  // that may not know it is gone — ordinary, and distinct from a hang-up.
+  const stuck = {
+    mtu: MIN_MTU,
+    label: 'stuck',
+    write: () => false, // never accepts, never signals ready
+    onReady: () => {},
+    onPacket: () => {},
+    onDisconnect: () => {},
+    close: () => {},
+  };
+  const link = new GattLink(stuck, { readyTimeoutMs: 60 });
+
+  const store = new RecordStore();
+  fill(store, 1, 5);
+
+  const out = await syncOverLink(store, resolver, link, 'initiator', {
+    receiveTimeoutMs: 500,
+  });
+  assert.equal(out.ending, 'peer-silent', `reported ${out.ending}: ${out.error ?? ''}`);
+  assert.match(out.error!, /stalled for 60 ms/);
 });
