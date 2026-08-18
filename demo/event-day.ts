@@ -30,6 +30,25 @@ import {
   type KeyResolver,
 } from '../packages/courier-core/src/index.ts';
 import { ingestBatch, ScanSuppressor } from '../packages/courier-bridge/src/index.ts';
+import {
+  DecoderRegistry,
+  describeGaps,
+  teamEstimatesFrom,
+  peerResiduals,
+  residualScale,
+} from '../packages/courier-decode/src/index.ts';
+import {
+  rankPicklist,
+  formatPicklist,
+  contingencies,
+  seededRng,
+  scoutEffects,
+  adjustForPeers,
+  scoutReliability,
+  cusumUpdate,
+  describeDrift,
+  type CusumState,
+} from '../packages/analytics/src/index.ts';
 import { loadProfileSet } from '../packages/courier-bridge/src/profiles.ts';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
@@ -38,6 +57,24 @@ const EVENT = '2027mose';
 const SCOUTS = 8;
 const QUALS = 80;
 const TEAMS = [8793, 9143, 254, 1678, 118, 2056, 3128, 5940, 27, 1323, 604, 2910];
+/** One scout stops watching partway through the day. Section 5 has to find them. */
+const DROWSY_SCOUT = 5;
+const DROWSY_FROM = 41;
+
+/**
+ * Claims this run makes, checked before it exits.
+ *
+ * A demo is the only thing here that exercises every layer against every other
+ * one, which is where most of this project's real bugs turned up. One that
+ * silently degrades -- a picklist that stops separating teams, a drift detector
+ * that starts naming the wrong person -- is worse than no demo, because the
+ * output still looks like a success. So it fails loudly instead.
+ */
+const claims: Array<{ what: string; held: boolean }> = [];
+function claim(what: string, held: boolean): boolean {
+  claims.push({ what, held });
+  return held;
+}
 
 const bold = (s: string): string => `[1m${s}[0m`;
 const dim = (s: string): string => `[2m${s}[0m`;
@@ -89,6 +126,21 @@ function robotsInMatch(m: number): number[] {
 }
 
 /**
+ * How good each robot actually is, and how consistent.
+ *
+ * Teams at an event are not interchangeable, and a demo where they are shows a
+ * picklist of twelve identical rows -- which reads as "the tool cannot separate
+ * anybody" rather than "these robots were the same." Spread ranges from 1 to 5
+ * so floor and ceiling carry information the mean does not: 5940 below scores
+ * less on average than 1678 but is far steadier, which is exactly the second-
+ * pick tradeoff a captain is trying to see.
+ */
+function skillOf(team: number): { mean: number; spread: number } {
+  const i = TEAMS.indexOf(team);
+  return { mean: 26 - i * 2, spread: 1 + ((i * 7) % 5) };
+}
+
+/**
  * The foreign app's QR format: tab-separated, scout / match / team, then five
  * columns of whatever that team decided to record this season. Courier reads
  * the first three and never looks at the rest.
@@ -102,22 +154,32 @@ function robotsInMatch(m: number): number[] {
 function scansFor(scout: number, rand: () => number): string[] {
   const out: string[] = [];
   for (let m = 1; m <= QUALS; m++) {
-    const team = robotsInMatch(m)[scout % 6]!;
+    // Slots rotate with the match so the two doubling scouts are not always
+    // paired with the same person. That matters: with a fixed pairing there is
+    // no third opinion to break the symmetry, and the effects fit can only
+    // split a disagreement between the pair (D-26). Rotating gives it
+    // something to work with — which is also the advice the tool prints.
+    const team = robotsInMatch(m)[(scout + (scout >= 6 ? m : 0)) % 6]!;
 
     // The ground truth for this robot in this match — both scouts see the same
     // robot do the same things.
     const truth = rng(m * 7919 + team);
+    const skill = skillOf(team);
     const auto = Math.floor(truth() * 5);
-    const teleop = Math.floor(truth() * 18);
+    // Centred on the robot's own ability, wobbling by its own consistency.
+    const teleop = Math.max(0, Math.round(skill.mean + (truth() - 0.5) * 2 * skill.spread));
     const climb = ['none', 'park', 'shallow', 'deep'][Math.floor(truth() * 4)]!;
     const defense = truth() > 0.75 ? 'heavy' : 'none';
 
     // ...but one of them occasionally miscounts.
     const miscount = rand() < 0.15;
+    // And scout 5 stops paying attention halfway through the day, which is the
+    // failure the drift detector exists for. A drowsy scout does not go silent;
+    // they keep submitting, and the numbers quietly run low.
+    const drowsy = scout === DROWSY_SCOUT && m >= DROWSY_FROM;
+    const reported = Math.max(0, (miscount ? teleop + 1 : teleop) - (drowsy ? 6 : 0));
     out.push(
-      [`scout-${scout}`, m, team, auto, miscount ? teleop + 1 : teleop, climb, defense, `note-${m}`].join(
-        '\t',
-      ),
+      [`scout-${scout}`, m, team, auto, reported, climb, defense, `note-${m}`].join('\t'),
     );
   }
   return out;
@@ -207,7 +269,11 @@ for (let pass = 1; pass <= 3; pass++) {
   console.log(
     `  pass ${pass}: store sizes ${sizes.join(', ')}  ${converged ? ok('converged') : dim('spreading…')}`,
   );
-  if (converged) break;
+  if (converged) {
+    claim('every phone converges on the same set', true);
+    break;
+  }
+  if (pass === 3) claim('every phone converges on the same set', false);
 }
 
 /* ── the pit ──────────────────────────────────────────────────────────────── */
@@ -329,9 +395,180 @@ console.log(
   ),
 );
 
+/* -- the team reads back its own data ---------------------------------- */
+
+rule('5 · The team reads back what it wrote');
+
+// A decoder is the team's OWN description of their OWN body format, registered
+// on their own device and applied here, at analysis time. It never travelled
+// with a record, and Courier never parsed a body in transit.
+const registry = DecoderRegistry.from([
+  {
+    schemaId: 'courier.generic.tsv.v1',
+    format: 'delimited',
+    delimiter: '\t',
+    fields: [
+      { name: 'auto', type: 'integer' as const, source: 3, min: 0, max: 200 },
+      { name: 'teleop', type: 'integer' as const, source: 4, min: 0, max: 500 },
+      {
+        name: 'endgame',
+        type: 'enum' as const,
+        source: 5,
+        values: ['none', 'park', 'shallow', 'deep'],
+      },
+      { name: 'defense', type: 'enum' as const, source: 6, values: ['none', 'heavy'] },
+    ],
+  },
+]);
+
+// D-25: the CURRENT view, not every record ever admitted. The log keeps
+// corrections forever so peers can still reconcile against them; an average
+// must not, or a slipped keystroke counts twice at two plausible values.
+const current = laptop.currentRecords();
+const decoded = registry.decodeAll(current);
+console.log(`  current records  ${current.length} of ${laptop.size} in the log`);
+console.log(`  decoded          ${decoded.records.length}`);
+console.log(`  unreadable       ${decoded.unknownSchema + decoded.failed}`);
+claim('every record decodes with the team\'s own schema', decoded.records.length === current.length);
+const gaps = describeGaps(decoded, current.length);
+if (gaps) console.log(warn('\n  ' + gaps.split('\n').join('\n  ')));
+
+/* -- the picklist ------------------------------------------------------- */
+
+rule('6 · A picklist, with no venue pack and no API key');
+
+const { estimates, thin } = teamEstimatesFrom(decoded.records, 'teleop');
+const ours = estimates.find((e) => e.team === 8793)!;
+const board = estimates
+  .filter((e) => e.team !== 8793)
+  .map((e) => ({ team: e.team, mean: e.mean, sigma: e.sigma }));
+
+const ranked = rankPicklist({
+  candidates: board,
+  alliance: [{ team: ours.team, mean: ours.mean, sigma: ours.sigma }],
+  picksBeforeYourNext: 5,
+  haveSecondPick: true,
+  rng: seededRng(1),
+});
+
+console.log(
+  formatPicklist(ranked, 8)
+    .split('\n')
+    .map((l) => '  ' + l)
+    .join('\n'),
+);
+if (thin.length > 0) {
+  console.log(
+    warn(
+      `\n  ${thin.length} team(s) omitted for fewer than 3 observations: ` +
+        thin.map((t) => `${t.team} (${t.observations})`).join(', '),
+    ),
+  );
+}
+// A board where every row is the same number demonstrates nothing, and would
+// read as "the tool cannot separate teams" rather than "these teams were equal".
+claim(
+  'the picklist separates the board',
+  ranked.length > 1 && ranked[0]!.expectedValue - ranked.at(-1)!.expectedValue > 1,
+);
+claim('the strongest robot the team did not already have tops the board', ranked[0]!.team === 9143);
+
+console.log('\n  ' + bold('If the top of the list is gone when your turn comes:'));
+for (const c of contingencies(ranked, 3)) {
+  console.log(`    ${c.goneTeams.join(', ')} taken  ->  take ${c.take}`);
+}
+console.log(
+  dim(
+    '\n  No least squares here, and that is the point rather than a shortcut. OPR and its\n' +
+      '  relatives exist because the OFFICIAL record is alliance-level and the parts have to be\n' +
+      '  solved for. Scouting data is already per-robot, so the deconvolution is unnecessary --\n' +
+      '  and a mean is far easier for a student to defend in a meeting.',
+  ),
+);
+
+/* -- who stopped watching ----------------------------------------------- */
+
+rule('7 · Finding the scout who stopped watching');
+
+const res = peerResiduals(decoded.records, 'teleop');
+console.log(
+  `  ${res.doubleScouted} of ${res.observations} observations had a second opinion; ` +
+    `${res.unpaired} did not`,
+);
+
+// D-27: raw peer residuals are exact negatives within a pair, so one drifting
+// scout produces an equal and opposite "drift" in whoever sat beside them. Fit
+// an effect per scout across ALL their pairings and remove the PEERS' effects
+// before anybody is judged.
+const comparisons = res.residuals.map((r) => ({
+  scout: r.scout,
+  peers: r.peerScouts,
+  residual: r.residual,
+}));
+const effects = scoutEffects(comparisons);
+const adjusted = adjustForPeers(comparisons, effects);
+const scale = residualScale(res.residuals);
+
+const quality = scoutReliability(
+  res.residuals.map((r, i) => ({ scout: r.scout, residual: adjusted[i]! })),
+);
+console.log('\n  scout       paired    bias   spread');
+for (const q of quality) {
+  const sd = Math.sqrt(1 / q.precision);
+  console.log(
+    `  ${q.scout.slice(0, 8)}  ${String(q.observations).padStart(8)}  ` +
+      `${q.bias >= 0 ? '+' : ''}${q.bias.toFixed(1).padStart(5)}  ${sd.toFixed(1).padStart(6)}`,
+  );
+}
+
+const alarms = new Map<string, { at: number; message: string }>();
+const states = new Map<string, CusumState | null>();
+res.residuals.forEach((r, i) => {
+  const next = cusumUpdate(states.get(r.scout) ?? null, adjusted[i]! / scale);
+  states.set(r.scout, next);
+  if (next.alarm && !alarms.has(r.scout)) {
+    alarms.set(r.scout, { at: r.match, message: describeDrift(next, adjusted[i]!) });
+  }
+});
+
+const drowsyId = toHex(mintScoutPseudonym(`scout-${DROWSY_SCOUT}`, EVENT, meshKey));
+claim('the drowsy scout is flagged', alarms.has(drowsyId));
+claim('nobody else is flagged', alarms.size <= 1);
+console.log();
+if (alarms.size === 0) {
+  console.log(warn('  Nobody flagged -- the injected drift was too mild for these constants.'));
+} else {
+  for (const [scout, a] of alarms) {
+    const right = scout === drowsyId;
+    console.log(
+      `  ${right ? ok('OK ') : warn('?? ')}${scout.slice(0, 8)} from ${matchLabel(a.at)} -- ${a.message}`,
+    );
+  }
+  console.log(
+    dim(
+      `\n  scout-${DROWSY_SCOUT} is the one this run made drowsy, from Q${DROWSY_FROM}. ` +
+        `Their pseudonym is ${drowsyId.slice(0, 8)}.`,
+    ),
+  );
+}
+console.log(
+  warn(
+    '\n  This measures DISAGREEMENT WITH OTHER SCOUTS, not accuracy. Two people watching the same\n' +
+      '  wrong robot agree perfectly and both look reliable. A pair who ONLY ever watch together\n' +
+      '  cannot be separated at all -- nothing breaks the symmetry, and the fit splits the\n' +
+      '  disagreement between them. This run rotates the pairings for exactly that reason.',
+  ),
+);
+console.log(
+  dim(
+    '  The CUSUM constants are k=0.75 / h=5, measured rather than quoted: the textbook 0.5 / 4\n' +
+      '  falsely accuses a clean scout 23% of the time over one event. npm run measure:cusum.',
+  ),
+);
+
 /* ── an outsider tries to inject ──────────────────────────────────────────── */
 
-rule('5 · A rival team injects forged records');
+rule('8 · A rival team injects forged records');
 
 const rival = generateDeviceKey('software');
 const rivalStore = new RecordStore();
@@ -352,6 +589,7 @@ console.log(`  ${bold(String(attack.rejected))} records rejected across the exch
 console.log(
   `  laptop size ${before} → ${laptop.size} ${laptop.size === before ? ok('✓ unchanged') : warn('✗ poisoned')}`,
 );
+claim('forged records do not reach the laptop', laptop.size === before);
 console.log(
   dim(
     '  Every record is independently signed, so a peer you do not trust cannot inject.\n' +
@@ -380,4 +618,25 @@ console.log(
       '  That figure is an assumption carried through, not a measurement — see docs/MEASUREMENTS.md §6.',
   ),
 );
+console.log();
+
+/* -- the claims, checked ------------------------------------------------ */
+
+rule('Claims checked');
+for (const c of claims) {
+  console.log(`  ${c.held ? ok('OK  ') : warn('FAIL')} ${c.what}`);
+}
+const broken = claims.filter((c) => !c.held);
+if (broken.length > 0) {
+  console.log(
+    warn(
+      `\n  ${broken.length} of ${claims.length} claims did not hold. This demo runs the real code\n` +
+        '  paths across every layer, so a failure here is a defect somewhere, not a flaky run —\n' +
+        '  nothing in it depends on timing, the network, or an unseeded random source.',
+    ),
+  );
+  process.exitCode = 1;
+} else {
+  console.log(dim(`\n  All ${claims.length} claims held.`));
+}
 console.log();
