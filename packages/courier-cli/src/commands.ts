@@ -134,20 +134,28 @@ export async function grant(ws: Workspace, requestPath: string, outPath: string)
     roster: registry.active(),
   });
 
-  registry.add(result.joiner);
-  ws.writeRegistry(registry);
+  // STAGED, not trusted. The whole point of the spoken code is that it is
+  // compared before anything is believed; writing the joiner into registry.cbor
+  // here would trust an attacker who substituted a request the moment the
+  // operator ran the command, and no printed advice about deleting the grant
+  // would take it back out again.
+  ws.stageAdmission(result.joiner, result.sas);
   writeFileSync(outPath, result.grantBytes);
 
   return ok(
     [
-      `Admitted "${parsed.label}" (${toHex(result.joiner.kid).toUpperCase()}, ${parsed.backing}-backed).`,
-      `Grant written to ${outPath}.`,
+      `Grant for "${parsed.label}" (${toHex(result.joiner.kid).toUpperCase()}, ${parsed.backing}-backed)`,
+      `written to ${outPath}.`,
       ``,
       `  Confirmation code:  ${result.sas}`,
       ``,
-      `Read that code aloud. The joining device must show the SAME six digits.`,
-      `If it does not, someone substituted a request — stop, delete the grant, and`,
-      `start again.`,
+      `This device is NOT trusted yet. Read that code aloud; the joining device must`,
+      `show the SAME six digits. Then run:`,
+      ``,
+      `  courier confirm ${result.sas} <the code they read back>`,
+      ``,
+      `That is what admits them. If the codes differ, run confirm anyway — it will`,
+      `throw the staged key away rather than leaving it lying around.`,
     ].join('\n'),
   );
 }
@@ -191,13 +199,66 @@ export async function accept(
   );
 }
 
-export function confirm(a: string, b: string): CommandResult {
-  return sasMatches(a, b)
-    ? ok('Codes match. The pairing is genuine.')
-    : fail(
-        'Codes DO NOT match. Someone substituted a QR code, or the two devices paired with\n' +
-          'different partners. Delete the new workspace and start the ceremony again.',
+/**
+ * Compare the two spoken codes — and, on the admitting device, act on the answer.
+ *
+ * This is the commit point of the ceremony. `grant` stages the joiner and
+ * trusts nothing; the key only enters registry.cbor here, and only when both
+ * codes match each other AND match what this device actually computed. A
+ * mismatch throws the staged key away rather than leaving it for someone to
+ * commit later by accident.
+ *
+ * Checking against the staged code matters as much as checking the two against
+ * each other: two operators who both mistype the same digits would otherwise
+ * confirm a pairing neither device agrees with.
+ */
+export function confirm(ws: Workspace | null, a: string, b: string): CommandResult {
+  const pending = ws?.exists ? ws.pendingAdmission() : null;
+
+  if (!sasMatches(a, b)) {
+    if (pending && ws) {
+      ws.discardAdmission();
+      return fail(
+        'Codes DO NOT match. Someone substituted a request, or the two devices paired with\n' +
+          'different partners.\n\n' +
+          `The staged key for "${pending.key.label}" has been discarded and was never trusted.\n` +
+          'Nothing to undo. Start the ceremony again.',
       );
+    }
+    return fail(
+      'Codes DO NOT match. Someone substituted a QR code, or the two devices paired with\n' +
+        'different partners. Delete the new workspace and start the ceremony again.',
+    );
+  }
+
+  if (!pending || !ws) {
+    // The joining side, or a device with nothing staged. A comparison is all
+    // there is to do, and saying so beats implying something was admitted.
+    return ok('Codes match. The pairing is genuine.');
+  }
+
+  if (!sasMatches(a, pending.sas)) {
+    ws.discardAdmission();
+    return fail(
+      `Both codes read ${a}, but this device computed ${pending.sas}.\n\n` +
+        'Matching each other is not enough — that only proves the two of you typed the same\n' +
+        'thing. The staged key has been discarded. Start the ceremony again.',
+    );
+  }
+
+  const registry = ws.registry();
+  registry.add(pending.key);
+  ws.writeRegistry(registry);
+  ws.discardAdmission();
+
+  return ok(
+    [
+      `Codes match. Admitted "${pending.key.label}" ` +
+        `(${toHex(pending.key.kid).toUpperCase()}, ${pending.key.backing}-backed).`,
+      ``,
+      `Records signed by that device are accepted from now on.`,
+    ].join('\n'),
+  );
 }
 
 /* -------------------------------------------------------------- ingest ---- */
