@@ -64,6 +64,89 @@ test('a peer holding two records under one truncated id gets both requested', ()
   assert.equal(toHex(reply!.want![0]!), toHex(mineTrunc));
 });
 
+test('a SPLIT truncated-id collision is not stranded forever', () => {
+  // The harder half of the same problem, and the one the multimap fix missed.
+  // The earlier case has both colliding records in ONE store, so the counts
+  // disagree (2 vs 1) and the id-list diff notices. Give one record to each
+  // peer instead and every count matches at 1 == 1: no want, no give, an empty
+  // reply, and the session falls silent — identically on every future session,
+  // so both records are stranded permanently. Splitting the pair is strictly
+  // cheaper for the same attacker the module already puts in scope.
+  //
+  // Forcing a real BLAKE3 collision is ~2^32 work, so as with the test above
+  // this drives the decision path directly: the peer reports ONE record under a
+  // prefix we also hold exactly once. An id list only ever arrives because the
+  // digests disagreed, so equal counts leave a collision as the only
+  // explanation and we must not conclude "nothing to do".
+  const mesh = new TestMesh();
+  const store = new RecordStore();
+  const { envelope, record } = mesh.seal({
+    device: 'tablet-1',
+    scout: 'ada',
+    matchKey: `${EVENT}_qm42`,
+    team: 8793,
+    body: utf8('ours'),
+  });
+  assert.equal(store.admit(envelope, mesh.resolver).status, 'admitted');
+
+  const mineTrunc = recordId(record).slice(0, ID_PREFIX_BYTES);
+  const session = new AntiEntropySession(store, mesh.resolver);
+  const peerMessage: SyncMessage = { idLists: [{ prefix: '', ids: [mineTrunc] }] };
+  const reply = session.receive(decodeSyncMessage(encodeSyncMessage(peerMessage)));
+
+  assert.ok(reply, 'fell silent on a split collision — both records strand forever');
+  assert.ok(reply!.want?.length, 'must ask, since counts cannot tell these apart');
+  assert.equal(toHex(reply!.want![0]!), toHex(mineTrunc));
+  // And offer ours in the same breath, or the peer is still missing it after
+  // we have been made whole.
+  assert.ok(reply!.records?.length, 'must offer our side of the pair too');
+});
+
+test('the split-collision fallback stays quiet when the counts explain the difference', () => {
+  // The fallback must not fire on ordinary syncs, or every leaf gets dumped
+  // wholesale on every round and the ≤2 round-trip budget is gone.
+  const mesh = new TestMesh();
+  const store = new RecordStore();
+  const seal = (body: string) =>
+    mesh.seal({
+      device: 'tablet-1',
+      scout: 'ada',
+      matchKey: `${EVENT}_qm42`,
+      team: 8793,
+      body: utf8(body),
+    });
+
+  const ours = seal('ours');
+  store.admit(ours.envelope, mesh.resolver);
+  const theirs = seal('theirs');
+
+  const session = new AntiEntropySession(store, mesh.resolver);
+  const reply = session.receive(
+    decodeSyncMessage(
+      encodeSyncMessage({
+        idLists: [
+          {
+            prefix: '',
+            ids: [
+              recordId(ours.record).slice(0, ID_PREFIX_BYTES),
+              recordId(theirs.record).slice(0, ID_PREFIX_BYTES),
+            ],
+          },
+        ],
+      }),
+    ),
+  );
+
+  assert.ok(reply);
+  // One want, for the record we genuinely lack — not one per prefix in the list.
+  assert.equal(reply!.want?.length, 1);
+  assert.equal(
+    toHex(reply!.want![0]!),
+    toHex(recordId(theirs.record).slice(0, ID_PREFIX_BYTES)),
+  );
+  assert.ok(!reply!.records?.length, 'offered records the peer already listed');
+});
+
 test('a want for a truncated id is served with every record sharing it', () => {
   const mesh = new TestMesh();
   const store = new RecordStore();

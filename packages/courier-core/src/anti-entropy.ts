@@ -362,19 +362,51 @@ export class AntiEntropySession {
     //    receiver deduplicate by record-id, which it does for free. Sending a
     //    record the peer already has costs one duplicate; failing to send one
     //    costs permanent divergence.
+    //
+    //    Counts are still not sufficient on their own. See the fallback at the
+    //    end of this loop for the case where every count matches and the two
+    //    stores nevertheless differ.
     for (const list of msg.idLists ?? []) {
       const theirCount = countByHex(list.ids);
       const mine = idsWithPrefix(this.#store.sortedIds, list.prefix);
       const mineCount = countByHex(mine.map(trunc));
 
+      let explained = false;
       for (const [t, n] of theirCount) {
-        if ((mineCount.get(t) ?? 0) < n) outWant.push(fromHexBytes(t));
+        if ((mineCount.get(t) ?? 0) < n) {
+          outWant.push(fromHexBytes(t));
+          explained = true;
+        }
       }
       const give = mine.filter((id) => {
         const t = toHex(trunc(id));
         return (theirCount.get(t) ?? 0) < (mineCount.get(t) ?? 0);
       });
+      if (give.length > 0) explained = true;
       outRecords.push(...this.#store.envelopesFor(give));
+
+      // Counts cannot see a SPLIT collision: we hold X, the peer holds Y, X and
+      // Y differ but share a truncated id. Every count matches, both loops
+      // above produce nothing, the reply is empty and the session falls silent
+      // — identically on every future session, so the two records are stranded
+      // forever. The comment above claims the multiset comparison prevents
+      // exactly this; it only ever covered the unequal-count case.
+      //
+      // The signal is that an id list arrived at all. Step 3 emits one only
+      // where the digests for that range DISAGREE, so counts matching
+      // everywhere leaves a collision as the only remaining explanation. Ask
+      // for every shared prefix and offer ours in the same breath: a `want` is
+      // served with every record sharing the prefix, and record-id dedup makes
+      // the overlap free.
+      //
+      // This cannot fire between agreeing stores, because agreeing stores never
+      // produce an id list. A hostile peer can send one anyway to make us dump a
+      // leaf, but it could already do that with `want`, and either way the reply
+      // leaves in MAX_RECORDS_PER_MESSAGE chunks.
+      if (!explained && theirCount.size > 0) {
+        for (const t of theirCount.keys()) outWant.push(fromHexBytes(t));
+        outRecords.push(...this.#store.envelopesFor(mine));
+      }
     }
 
     // Queue records and release them a chunk at a time. A message is atomic, so
