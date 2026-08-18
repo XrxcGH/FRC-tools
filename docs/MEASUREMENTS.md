@@ -114,5 +114,6 @@ conditional on that assumption.
 | Connection setup time, device to device | Radio-dependent; the ~1.8 s used in the LEAF_THRESHOLD derivation is an assumption and the whole threshold rests on it | LEAF_THRESHOLD, D-11 |
 | Battery cost of a full event day of gossip | Needs a real device and a real radio duty cycle; D-21 explicitly leaves this to be re-derived after D-11 changed the schedule | NFR-1, D-21 |
 | ChromeOS BLE advertising capability | Platform capability question, not a protocol one — and it decides whether a rookie team with only Chromebooks can form a mesh at all | The rookie persona |
+| Outbound queue depth for the Capacitor transport | `MAX_PENDING_WRITES` is 32, chosen so a bound EXISTS rather than measured. The right depth is one connection interval's worth of packets, which needs two real devices | Send-side throughput on device |
 | Verify throughput on 2016-class hardware | This machine is not the target device; the ratio to a Celeron N3060 Chromebook is unknown | NFR-6, catch-up time |
 

@@ -22,6 +22,7 @@ export {
 
 export {
   PluginGattTransport,
+  MAX_PENDING_WRITES,
   webFallbackPlugin,
   CapacitorTransportError,
 } from './transport.ts';

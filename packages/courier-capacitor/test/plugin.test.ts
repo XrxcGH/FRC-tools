@@ -7,6 +7,8 @@ import {
   CourierBleHub,
   webFallbackPlugin,
   CapacitorTransportError,
+  PluginGattTransport,
+  MAX_PENDING_WRITES,
   type CourierBlePlugin,
   type CourierBleCapabilities,
 } from '../src/index.ts';
@@ -336,4 +338,96 @@ test('packets keep their order even when native pushes back', async () => {
 
   assert.equal(toHex(received!), toHex(payload));
   assert.equal(lb.reassemblyStats.framesAbandoned, 0, 'no frame was torn by reordering');
+});
+
+/* ------------------------------------------------- backpressure reaches up */
+
+test('a peer that stops draining pushes back, instead of queueing without limit', async () => {
+  // The defect this guards. GattLink only stalls when transport.write() returns
+  // false, and PluginGattTransport used to return true unconditionally — so on
+  // a real device the stall guard could never fire, the "a stalled peer times
+  // out instead of hanging the sync forever" behaviour was simulator-only, and
+  // the outbound queue had no bound at all.
+  let accepting = true;
+  const seen: string[] = [];
+  const plugin = {
+    async connect() {
+      return { peerId: 'peer', mtu: MIN_MTU };
+    },
+    async write({ packet }: { packet: string }) {
+      if (!accepting) return { accepted: false };
+      seen.push(packet);
+      return { accepted: true };
+    },
+    async disconnect() {},
+    async addListener() {
+      return { remove: async () => {} };
+    },
+  } as unknown as CourierBlePlugin;
+
+  const transport = new PluginGattTransport(plugin, 'peer', MIN_MTU);
+  accepting = false;
+
+  // Push until it pushes back. If it never does, the queue is unbounded.
+  let accepted = 0;
+  for (let i = 0; i < 10_000; i++) {
+    if (!transport.write(new Uint8Array([i & 0xff]))) break;
+    accepted++;
+    // Let the drain microtask run so the queue reflects reality.
+    if (i % 8 === 0) await Promise.resolve();
+  }
+
+  assert.ok(accepted < 10_000, 'write() never returned false — the queue is unbounded');
+  assert.ok(transport.pendingWrites > 0, 'nothing was actually queued');
+  assert.ok(
+    transport.pendingWrites <= MAX_PENDING_WRITES + 1,
+    `queued ${transport.pendingWrites}, over the ${MAX_PENDING_WRITES} bound`,
+  );
+});
+
+test('draining below the bound wakes the sender, without waiting on native', async () => {
+  // Native only emits readyToWrite after it has refused something. If our own
+  // queue is what pushed back, nothing native ever refused, so no readyToWrite
+  // is coming and the link would wait for the full stall timeout on every
+  // frame.
+  let accepting = false;
+  const plugin = {
+    async write() {
+      return { accepted: accepting };
+    },
+    async disconnect() {},
+  } as unknown as CourierBlePlugin;
+
+  const transport = new PluginGattTransport(plugin, 'peer', MIN_MTU);
+  let woken = 0;
+  transport.onReady(() => {
+    woken++;
+  });
+
+  while (transport.write(new Uint8Array([1]))) await Promise.resolve();
+  assert.equal(woken, 0, 'woke before anything drained');
+
+  accepting = true;
+  transport.signalReady();
+  for (let i = 0; i < 200 && transport.pendingWrites > 0; i++) await Promise.resolve();
+
+  assert.equal(transport.pendingWrites, 0, 'the queue never drained');
+  assert.ok(woken > 0, 'the sender was never woken, so it would stall until the timeout');
+});
+
+test('a full frame still gets through a transport that pushes back', async () => {
+  // The end-to-end version: backpressure must slow the sender, not break it.
+  const [pa, pb] = fakePluginPair({ queueDepth: 2, mtu: MIN_MTU });
+  const [la, lb] = await Promise.all([
+    new CourierBleHub(pa).open('peer'),
+    new CourierBleHub(pb).open('peer'),
+  ]);
+
+  const payload = new Uint8Array(4_000);
+  for (let i = 0; i < payload.length; i++) payload[i] = (i * 17) & 0xff;
+
+  const receiving = lb.receive();
+  await la.send(payload);
+  assert.equal(toHex((await receiving)!), toHex(payload));
+  assert.equal(lb.reassemblyStats.framesAbandoned, 0);
 });
