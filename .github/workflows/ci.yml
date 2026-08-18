@@ -88,3 +88,40 @@ jobs:
           node --experimental-strip-types packages/courier-cli/src/main.ts export "$W/day.courier" --dir "$W/tablet"
           node --experimental-strip-types packages/courier-cli/src/main.ts import "$W/day.courier" --dir "$W/laptop"
           node --experimental-strip-types packages/courier-cli/src/main.ts verify --dir "$W/laptop"
+
+      # The analysis commands need real volume: three observations per team
+      # before anyone is ranked, and two scouts on a robot before anyone can be
+      # compared. A two-line fixture would exercise only the refusal paths.
+      - name: the analysis commands work on a real store
+        run: |
+          set -e
+          W="$RUNNER_TEMP/ci-analysis"
+          C="node --experimental-strip-types packages/courier-cli/src/main.ts"
+          $C init 2027mose pit-laptop --dir "$W/ws"
+
+          : > "$W/scans.txt"
+          for m in 1 2 3 4 5 6; do
+            for t in 8793 9143 1114 2056; do
+              base=$(( 40 - (t % 7) * 3 ))
+              printf 'ada\t%s\t%s\t3\t%s\tpark\n' "$m" "$t" "$((base + m))"     >> "$W/scans.txt"
+              printf 'bo\t%s\t%s\t3\t%s\tpark\n'  "$m" "$t" "$((base + m + 1))" >> "$W/scans.txt"
+            done
+          done
+          $C ingest "$W/scans.txt" --dir "$W/ws"
+
+          printf '%s' '{"schemaId":"courier.generic.tsv.v1","format":"delimited","delimiter":"\t","fields":[{"name":"auto","type":"integer","source":3,"min":0,"max":200},{"name":"teleop","type":"integer","source":4,"min":0,"max":500},{"name":"endgame","type":"string","source":5}]}' > "$W/schema.json"
+
+          $C picklist --dir "$W/ws" --schema "$W/schema.json" --field teleop --alliance 8793 --picks-between 2
+          $C scouts   --dir "$W/ws" --schema "$W/schema.json" --field teleop
+
+          # A board that quietly ranks nothing is the failure that matters here,
+          # so require a real team to appear on it.
+          $C picklist --dir "$W/ws" --schema "$W/schema.json" --field teleop --alliance 8793 | grep -q 9143
+          $C scouts --dir "$W/ws" --schema "$W/schema.json" --field teleop | grep -q "had a second opinion"
+
+          # And the refusals stay refusals rather than degrading to empty output.
+          if $C picklist --dir "$W/ws" --schema "$W/schema.json" --field nope --alliance 8793; then
+            echo "::error::picklist accepted a field that does not exist"
+            exit 1
+          fi
+          echo "Analysis commands produced a board and refused a bad field."
