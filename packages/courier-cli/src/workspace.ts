@@ -203,16 +203,63 @@ export class Workspace {
     writeFileSync(this.#registryPath, r.serialize());
   }
 
+  /**
+   * Records the last load could NOT verify against the current registry.
+   *
+   * Loading is lossy by nature — a record whose signing key this device cannot
+   * resolve is not admitted — and the loss used to be invisible: `store()`
+   * discarded the MergeResult, `writeStore()` then serialised only the
+   * survivors, and both `ingest` and `import` call it unconditionally. Losing
+   * registry.cbor (a flash-drive copy that missed one file) makes every record
+   * unresolvable at once, including this device's own, and the next ingest
+   * rewrites the store down to nothing while printing "store now holds 0
+   * records" and exiting 0.
+   *
+   * FR-3 says quarantine, never silently drop. This is the counter that makes
+   * the difference sayable, and `writeStore` refuses to run while it is set.
+   */
+  #unloadable: { count: number; reasons: string[] } | null = null;
+
+  get unloadable(): { count: number; reasons: string[] } | null {
+    return this.#unloadable;
+  }
+
   store(): RecordStore {
     const store = new RecordStore();
+    this.#unloadable = null;
     if (!existsSync(this.storePath)) return store;
     const bytes = new Uint8Array(readFileSync(this.storePath));
     if (bytes.length === 0) return store;
-    mergeBundle(store, bytes, this.registry().resolver());
+
+    const held = readBundle(bytes).count;
+    const merged = mergeBundle(store, bytes, this.registry().resolver());
+    const lost = held - store.size;
+    if (lost > 0) {
+      this.#unloadable = { count: lost, reasons: merged.reasons.slice(0, 8) };
+    }
     return store;
   }
 
-  writeStore(store: RecordStore): void {
+  /**
+   * Persist the store.
+   *
+   * Refuses while the last load dropped records, because writing would make the
+   * loss permanent. `force` exists for a caller that has shown the operator
+   * what is about to be discarded and been told to go ahead; nothing in the CLI
+   * passes it today.
+   */
+  writeStore(store: RecordStore, opts: { force?: boolean } = {}): void {
+    const lost = this.#unloadable;
+    if (lost && !opts.force) {
+      throw new WorkspaceError(
+        `refusing to write ${this.storePath}: ${lost.count} record(s) in it could not be ` +
+          `verified against the current registry, and writing would discard them permanently.\n` +
+          (lost.reasons.length ? `  - ${lost.reasons.join('\n  - ')}\n` : '') +
+          `Run "courier verify" for the full picture. The usual cause is a missing or ` +
+          `incomplete registry.cbor — restore it and nothing is lost, because the records ` +
+          `themselves are still in the file.`,
+      );
+    }
     const mesh = existsSync(this.#meshPath) ? this.mesh() : null;
     writeFileSync(
       this.storePath,
@@ -223,7 +270,14 @@ export class Workspace {
     );
   }
 
-  /** Records held, without loading and verifying the whole store. */
+  /**
+   * Records held, without loading and verifying the whole store.
+   *
+   * This is the BUNDLE HEADER count, so it can exceed what `store()` admits.
+   * That divergence is the point — it is how `status` can say "3 records held,
+   * 3 of which this device cannot currently verify" instead of quietly
+   * reporting 0 and letting the operator think their day never happened.
+   */
   storeCount(): number {
     if (!existsSync(this.storePath)) return 0;
     const bytes = new Uint8Array(readFileSync(this.storePath));
@@ -235,12 +289,28 @@ export class Workspace {
     const d = this.device();
     const m = this.mesh();
     const r = this.registry();
-    return [
+    // Loading is what discovers unverifiable records, so do it before
+    // reporting a count. "records 3" beside a store this device can no longer
+    // read is the reassuring line that let a day of scouting disappear.
+    const loaded = this.store().size;
+    const held = this.storeCount();
+    const lines = [
       `workspace   ${this.dir}`,
       `event       ${m.eventKey}`,
       `device      ${m.label} (${toHex(d.kid).toUpperCase()}, ${d.backing}-backed)`,
       `mesh        ${r.active().length} active device(s), ${r.list().length - r.active().length} revoked`,
-      `records     ${this.storeCount()}`,
-    ].join('\n');
+      `records     ${held}${held === loaded ? '' : ` (${loaded} readable)`}`,
+    ];
+    const lost = this.unloadable;
+    if (lost) {
+      lines.push(
+        ``,
+        `${lost.count} record(s) in the store cannot be verified against the current registry.`,
+        `They are still in the file and nothing has been lost yet — but ingest and import`,
+        `will refuse to write until this is resolved, because writing would discard them.`,
+        `The usual cause is a missing or incomplete registry.cbor. Run "courier verify".`,
+      );
+    }
+    return lines.join('\n');
   }
 }
