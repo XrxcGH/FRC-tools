@@ -105,8 +105,16 @@ test('two devices pair, agree on a code, and end up trusting each other', async 
     const tabletCode = /Confirmation code:\s+(\d{6})/.exec(a.text)![1]!;
 
     assert.equal(laptopCode, tabletCode, 'both screens show the same code');
-    assert.equal(cmd.confirm(laptopCode, tabletCode).code, 0);
-    assert.equal(cmd.confirm(laptopCode, '000000').code, 1);
+
+    // The grant does NOT trust anyone. Confirming is what admits.
+    assert.equal(laptop.registry().active().length, 1, 'granting trusted the joiner too early');
+    assert.ok(laptop.pendingAdmission(), 'the joiner should be staged, not trusted');
+
+    // 4. The codes are read aloud and compared. THIS is the commit point.
+    const c = cmd.confirm(laptop, laptopCode, tabletCode);
+    assert.equal(c.code, 0, c.text);
+    assert.match(c.text, /Admitted/);
+    assert.equal(laptop.pendingAdmission(), null, 'the staged key outlived the ceremony');
 
     // Both registries now hold both devices.
     assert.equal(laptop.registry().active().length, 2);
@@ -122,10 +130,87 @@ test('two devices pair, agree on a code, and end up trusting each other', async 
 });
 
 test('a mismatched confirmation code tells the operator to start over', () => {
-  const r = cmd.confirm('123456', '654321');
+  const r = cmd.confirm(null, '123456', '654321');
   assert.equal(r.code, 1);
   assert.match(r.text, /DO NOT match/);
   assert.match(r.text, /start the ceremony again/i);
+});
+
+test('a substituted request is never trusted, and needs nothing undone', async () => {
+  // The defect this exists for. `grant` used to write the joiner into
+  // registry.cbor before the six digits were even printed, so an attacker who
+  // swapped the request QR was trusted the moment the operator ran the command.
+  // The printed advice — delete the grant and start again — touches no
+  // registry, revoke is not routed through the CLI, and the only real undo was
+  // deleting the workspace, which also destroys device.key and every record.
+  const s = scratch();
+  try {
+    const laptop = new Workspace(join(s.dir, 'laptop'));
+    const attacker = new Workspace(join(s.dir, 'attacker'));
+    cmd.init(laptop, EVENT, 'pit-laptop');
+    cmd.init(attacker, EVENT, 'not-your-tablet');
+
+    const reqPath = join(s.dir, 'attacker.req');
+    cmd.joinRequest(attacker, reqPath);
+    const g = await cmd.grant(laptop, reqPath, join(s.dir, 'grant.bin'));
+    assert.equal(g.code, 0);
+    assert.match(g.text, /NOT trusted yet/);
+
+    const before = laptop.registry().active().length;
+    assert.equal(before, 1, 'the attacker was trusted by grant alone');
+
+    // The operators compare and the digits disagree.
+    const r = cmd.confirm(laptop, '111111', '222222');
+    assert.equal(r.code, 1);
+    assert.match(r.text, /discarded/);
+    assert.match(r.text, /never trusted/);
+
+    assert.equal(laptop.registry().active().length, before);
+    assert.equal(laptop.pendingAdmission(), null, 'the staged key was left behind');
+  } finally {
+    s.cleanup();
+  }
+});
+
+test('two operators who mistype the SAME wrong code do not admit anyone', async () => {
+  // Matching each other only proves they typed the same thing. The code has to
+  // match what this device actually computed.
+  const s = scratch();
+  try {
+    const laptop = new Workspace(join(s.dir, 'laptop'));
+    const tablet = new Workspace(join(s.dir, 'tablet'));
+    cmd.init(laptop, EVENT, 'pit-laptop');
+    cmd.init(tablet, EVENT, 'stands-tablet');
+
+    const reqPath = join(s.dir, 'req.bin');
+    cmd.joinRequest(tablet, reqPath);
+    await cmd.grant(laptop, reqPath, join(s.dir, 'grant.bin'));
+
+    const r = cmd.confirm(laptop, '000000', '000000');
+    assert.equal(r.code, 1);
+    assert.match(r.text, /this device computed/);
+    assert.match(r.text, /Matching each other is not enough/);
+    assert.equal(laptop.registry().active().length, 1);
+    assert.equal(laptop.pendingAdmission(), null);
+  } finally {
+    s.cleanup();
+  }
+});
+
+test('confirm on a device with nothing staged is still just a comparison', () => {
+  // The joining side has nothing to commit; saying "admitted" there would imply
+  // an action that did not happen.
+  const s = scratch();
+  try {
+    const ws = new Workspace(join(s.dir, 'ws'));
+    cmd.init(ws, EVENT, 'stands-tablet');
+    const r = cmd.confirm(ws, '123456', '123456');
+    assert.equal(r.code, 0);
+    assert.match(r.text, /pairing is genuine/);
+    assert.ok(!/Admitted/.test(r.text));
+  } finally {
+    s.cleanup();
+  }
 });
 
 /* ---------------------------------------------------------------- ingest -- */
@@ -198,8 +283,12 @@ test('a bundle moves a day of data between two paired devices', async () => {
     const reqPath = join(s.dir, 'req.bin');
     const grantPath = join(s.dir, 'grant.bin');
     cmd.joinRequest(tablet, reqPath);
-    await cmd.grant(laptop, reqPath, grantPath);
+    const g = await cmd.grant(laptop, reqPath, grantPath);
     await cmd.accept(tablet, grantPath, reqPath);
+    // The ceremony is not finished until the codes are compared — that is what
+    // admits the joiner, so a test that skips it is not testing a paired mesh.
+    const code = /Confirmation code:\s+(\d{6})/.exec(g.text)![1]!;
+    assert.equal(cmd.confirm(laptop, code, code).code, 0);
 
     const scans = join(s.dir, 'scans.txt');
     writeFileSync(

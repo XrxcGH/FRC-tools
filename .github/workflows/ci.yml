@@ -83,11 +83,23 @@ jobs:
           node --experimental-strip-types packages/courier-cli/src/main.ts join-request "$W/req.bin" --dir "$W/tablet"
           node --experimental-strip-types packages/courier-cli/src/main.ts grant "$W/req.bin" "$W/grant.bin" --dir "$W/laptop"
           node --experimental-strip-types packages/courier-cli/src/main.ts accept "$W/grant.bin" "$W/req.bin" --dir "$W/tablet"
+
+          # The ceremony is not finished until the codes are compared: `confirm`
+          # is what admits the joiner. Skipping it leaves the laptop trusting
+          # nobody, and every later step would pass while moving zero records.
+          CODE=$(node --experimental-strip-types packages/courier-cli/src/main.ts grant "$W/req.bin" "$W/grant.bin" --dir "$W/laptop" | grep -oE '[0-9]{6}' | head -1)
+          node --experimental-strip-types packages/courier-cli/src/main.ts confirm "$CODE" "$CODE" --dir "$W/laptop"
           printf 'ada\t1\t8793\t3\nbo\t1\t8793\t4\n' > "$W/scans.txt"
           node --experimental-strip-types packages/courier-cli/src/main.ts ingest "$W/scans.txt" --dir "$W/tablet"
           node --experimental-strip-types packages/courier-cli/src/main.ts export "$W/day.courier" --dir "$W/tablet"
           node --experimental-strip-types packages/courier-cli/src/main.ts import "$W/day.courier" --dir "$W/laptop"
           node --experimental-strip-types packages/courier-cli/src/main.ts verify --dir "$W/laptop"
+
+          # Assert the records actually crossed. Every command above exits 0
+          # even when nothing moves, so without this the whole walkthrough can
+          # pass while transferring an empty store.
+          node --experimental-strip-types packages/courier-cli/src/main.ts status --dir "$W/laptop" | grep -E 'records +2'
+          echo "Two records reached the laptop." 
 
       # The analysis commands need real volume: three observations per team
       # before anyone is ranked, and two scouts on a robot before anyone can be

@@ -38,7 +38,7 @@ const USAGE = `courier — move FRC scouting data between devices, by file
   courier join-request <out>                on the JOINING device
   courier grant <request> <out>             on a device already in the mesh
   courier accept <grant> <request>          back on the joining device
-  courier confirm <codeA> <codeB>           check the two codes match
+  courier confirm <codeA> <codeB>           compare the codes; ADMITS on a match
 
   Data:
   courier ingest <scans.txt>                seal QR payloads, one per line
@@ -124,7 +124,9 @@ export async function run(argv: string[]): Promise<cmd.CommandResult> {
 
     case 'confirm':
       need(2, 'confirm <codeA> <codeB>');
-      return cmd.confirm(args[0]!, args[1]!);
+      // The workspace goes in because this is the commit point of the pairing
+      // ceremony on the admitting device, not just a string comparison.
+      return cmd.confirm(ws, args[0]!, args[1]!);
 
     case 'ingest': {
       need(1, 'ingest <scans.txt>');

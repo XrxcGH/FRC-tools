@@ -38,7 +38,7 @@ There's also a working CLI. Everything moves by file — no daemon, no port, no 
 node packages/courier-cli/src/main.ts init 2027mose pit-laptop
 ```
 
-Pairing is two devices, three files, and one spoken six-digit code: `join-request` on the joining device, `grant` on a device already in the mesh, `accept` back on the joiner. If the two codes differ, someone substituted a QR and the ceremony stops. Then `ingest` seals QR payloads, `export` / `import` move a bundle on a flash drive, and `report` shows coverage with `●●` marking observations that got a second opinion.
+Pairing is two devices, three files, and one spoken six-digit code: `join-request` on the joining device, `grant` on a device already in the mesh, `accept` back on the joiner, then `confirm`. **`confirm` is the commit point** — `grant` stages the joiner and trusts nothing, so a substituted request is discarded rather than needing to be undone. It also checks the spoken code against what the device actually computed, because two operators who mistype the same digits agree with each other and with nothing else. Then `ingest` seals QR payloads, `export` / `import` move a bundle on a flash drive, and `report` shows coverage with `●●` marking observations that got a second opinion.
 
 `picklist` closes the loop without a venue pack, an API key, or a network — it ranks the board from the team's **own** scouting, read back through a decoder the team wrote for their own body format:
 
@@ -94,7 +94,7 @@ It ends by checking seven claims about what just happened and **exits non-zero i
 
 [![CI](https://github.com/XrxcGH/FRC-tools/actions/workflows/ci.yml/badge.svg)](https://github.com/XrxcGH/FRC-tools/actions/workflows/ci.yml)
 
-**Status: 477 tests passing**, on Node 22, 24 and current LTS.
+**Status: 480 tests passing**, on Node 22, 24 and current LTS.
 
 *Implemented* — the record format and canonical codec; envelope sealing and verification; the record store; range-digest set reconciliation with chunked transfer; QR ingest with profile detection; the pairing ceremony and key registry; the Season Pack format, versioning rules, scoring engine and validator; sneakernet bundles; a rate-limited, conditional-request HTTP client for the three upstream data sources; and signed venue packs with explicit staleness.
 

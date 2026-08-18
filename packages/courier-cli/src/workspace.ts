@@ -17,7 +17,7 @@
  * and no way for the two to drift.
  */
 
-import { readFileSync, writeFileSync, existsSync, mkdirSync, chmodSync } from 'node:fs';
+import { readFileSync, writeFileSync, existsSync, mkdirSync, chmodSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import {
   RecordStore,
@@ -35,7 +35,7 @@ import {
   type DeviceKeyPair,
   type KeyBacking,
 } from '@courier/core';
-import { KeyRegistry } from '@courier/pairing';
+import { KeyRegistry, type RegisteredKey } from '@courier/pairing';
 import { writeBundle, mergeBundle, readBundle } from '@courier/transport';
 
 export const DEFAULT_DIR = '.courier';
@@ -149,6 +149,49 @@ export class Workspace {
         ]),
       ),
     );
+  }
+
+  /* ------------------------------------------------- a staged admission --- */
+
+  get #pendingPath(): string {
+    return join(this.dir, 'pending-admission.cbor');
+  }
+
+  /**
+   * A device that has been granted, but whose code has not been compared yet.
+   *
+   * It lives OUTSIDE the registry on purpose. `grant` used to add the joiner
+   * and write registry.cbor before the six digits were even printed, so an
+   * attacker who substituted a request was trusted the moment the operator ran
+   * the command — and the printed remedy, "delete the grant and start again",
+   * touches no registry. Nothing in the CLI could undo it: revoke exists in
+   * @courier/pairing but is not routed, so the only real undo was deleting the
+   * workspace, which also destroys device.key and every record held.
+   *
+   * Staged here, `confirm` commits it or throws it away.
+   */
+  stageAdmission(key: RegisteredKey, sas: string): void {
+    writeFileSync(
+      this.#pendingPath,
+      encode(
+        new Map<CborKey, CborValue>([
+          [1, KeyRegistry.from([key]).serialize()],
+          [2, sas],
+        ]),
+      ),
+    );
+  }
+
+  pendingAdmission(): { key: RegisteredKey; sas: string } | null {
+    if (!existsSync(this.#pendingPath)) return null;
+    const m = expectMap(decode(new Uint8Array(readFileSync(this.#pendingPath))), 'pending admission');
+    const key = KeyRegistry.deserialize(expectBytes(m.get(1), 'staged key')).list()[0];
+    if (!key) return null;
+    return { key, sas: expectText(m.get(2), 'staged code') };
+  }
+
+  discardAdmission(): void {
+    if (existsSync(this.#pendingPath)) rmSync(this.#pendingPath, { force: true });
   }
 
   registry(): KeyRegistry {
