@@ -305,3 +305,48 @@ test('a freshly paired device can immediately verify the mesh’s records', asyn
 
   assert.equal(deriveKeyId(joinerDev.publicKey).length, 8);
 });
+
+test('a revoked key is not resurrected by re-learning it from a roster', () => {
+  // The defect this exists for. add() ended in an unconditional set, and a key
+  // arriving in a pairing grant roster carries no revokedAt — grantJoin
+  // serialises only publicKey, backing, label and addedAt. So every later
+  // pairing round trip was a chance for a device you had thrown out to walk
+  // back in, silently.
+  const d = generateDeviceKey('software');
+  const entry = {
+    kid: d.kid,
+    publicKey: d.publicKey,
+    backing: d.backing,
+    label: 'stands-tablet-3',
+    addedAt: 1_800_000_000_000,
+  };
+
+  const registry = KeyRegistry.from([entry]);
+  registry.revoke(d.kid, 'lost at the venue', 1_800_000_060_000);
+  assert.equal(registry.has(d.kid), false);
+  assert.equal(registry.active().length, 0);
+
+  // The same key comes back in a roster, exactly as acceptGrant would add it.
+  registry.add({ ...entry });
+
+  assert.equal(registry.has(d.kid), false, 'the revocation was undone by a roster merge');
+  assert.equal(registry.active().length, 0);
+  assert.equal(registry.get(d.kid)?.revokedReason, 'lost at the venue');
+  assert.equal(registry.resolver()(d.kid), undefined, 'a revoked key must not resolve');
+});
+
+test('a roster merge still updates the label of a live key', () => {
+  // Stickiness applies to the revocation, not to everything else.
+  const d = generateDeviceKey('software');
+  const entry = {
+    kid: d.kid,
+    publicKey: d.publicKey,
+    backing: d.backing,
+    label: 'old-name',
+    addedAt: 1_800_000_000_000,
+  };
+  const registry = KeyRegistry.from([entry]);
+  registry.add({ ...entry, label: 'pit-laptop' });
+  assert.equal(registry.get(d.kid)?.label, 'pit-laptop');
+  assert.equal(registry.has(d.kid), true);
+});

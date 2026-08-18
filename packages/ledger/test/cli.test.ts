@@ -273,3 +273,41 @@ test('the arg parser explains itself and rejects incomplete commands', async () 
   assert.equal((await run(['pack', '2027mose'])).code, 1);
   assert.match((await run(['frobnicate'])).text, /unknown command/);
 });
+
+test('pack fetches each source once and reports the cross-check', async () => {
+  // The defect this exists for. makeVenuePack called fetchEvent with a no-op
+  // writeFile, checked only its exit code, and never read its text — the sole
+  // place the TBA/FIRST cross-check is ever rendered. Every disagreement found
+  // during a `ledger pack` run was computed and thrown away. It then built a
+  // fresh client and fetched the same TBA event AGAIN, doubling the load on a
+  // service run by four unpaid trustees.
+  const hits: string[] = [];
+  const inner = fakeFetch();
+  const counting: FetchLike = async (url, init) => {
+    hits.push(url);
+    return inner(url, init);
+  };
+
+  const r = await makeVenuePack({
+    eventKey: '2027mose',
+    outDir: 'out',
+    outFile: 'out/2027mose.pack',
+    credentials: { tbaKey: 'k', firstUser: 'u', firstToken: 't' },
+    fetch: counting,
+    now: () => NOW,
+    writeFile: () => {},
+    signer: generateDeviceKey('software'),
+    seasonPackId: 'example-synthetic@1.0.0',
+  });
+  assert.equal(r.code, 0, r.text);
+
+  const tbaHits = hits.filter((u) => u.includes('thebluealliance'));
+  const perPath = new Map<string, number>();
+  for (const u of tbaHits) perPath.set(u, (perPath.get(u) ?? 0) + 1);
+  for (const [url, n] of perPath) {
+    assert.equal(n, 1, `fetched ${url} ${n} times — the pack re-fetched what it already had`);
+  }
+
+  // And it names both sources rather than claiming TBA alone.
+  assert.match(r.text, /sources: tba \+ first/);
+});

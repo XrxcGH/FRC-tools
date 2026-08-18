@@ -11,7 +11,7 @@
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { PoliteClient, type FetchLike, type HttpResponse } from './http.ts';
-import { TbaClient } from './tba.ts';
+import { TbaClient, lastOfficialMatch } from './tba.ts';
 import { FirstClient } from './first.ts';
 import { reconcileSnapshots, summariseConflicts } from './reconcile.ts';
 import { buildBulkExport } from './bulk.ts';
@@ -22,7 +22,7 @@ import {
   underDetermined,
   type AllianceObservation,
 } from '@courier/analytics';
-import type { DeviceKeyPair } from '@courier/core';
+import { matchLabel, type DeviceKeyPair } from '@courier/core';
 
 export interface LedgerResult {
   readonly text: string;
@@ -72,24 +72,41 @@ function defaultWrite(path: string, bytes: Uint8Array): void {
 }
 
 /**
- * Fetch, reconcile, and write a bulk export.
+ * Everything both commands need from the official sources, fetched ONCE.
  *
- * Reads whichever sources it has credentials for. With only one it still works
- * and says plainly that nothing was cross-checked — which is honest, and better
- * than refusing to run for a team that only has a TBA key.
+ * `makeVenuePack` used to call `fetchEvent` with a no-op writeFile, check only
+ * its exit code, and never read its text — which is the sole place the
+ * TBA/FIRST cross-check is ever rendered. Every disagreement found during a
+ * `ledger pack` run was computed and thrown away. It then built a fresh
+ * PoliteClient, with a fresh cache, and fetched the same TBA event again:
+ * double the load on a service this module's own header describes as four
+ * unpaid trustees on roughly $5,000 a year.
+ *
+ * Worse than the waste, the pack was then built from the TBA snapshot alone,
+ * so it carried TBA's numbers in exactly the places reconciliation had decided
+ * FIRST should win.
  */
-export async function fetchEvent(opts: FetchOptions): Promise<LedgerResult> {
+interface Collected {
+  readonly sources: SourceId[];
+  readonly notes: string[];
+  readonly reconciled: ReturnType<typeof reconcileSnapshots>;
+}
+
+async function collectEvent(
+  opts: FetchOptions,
+): Promise<{ ok: true; data: Collected } | { ok: false; failure: LedgerResult }> {
   const { eventKey, credentials } = opts;
   const fetchImpl = opts.fetch ?? nodeFetch;
-  const now = (opts.now ?? Date.now)();
-  const write = opts.writeFile ?? defaultWrite;
 
   if (!credentials.tbaKey && !(credentials.firstUser && credentials.firstToken)) {
-    return fail(
-      'no credentials. Set TBA_AUTH_KEY, or FRC_API_USER and FRC_API_TOKEN, or both.\n' +
-        'Both are free and self-serve. With both, the two sources are cross-checked and\n' +
-        'disagreements are reported; with one, nothing is checked against anything.',
-    );
+    return {
+      ok: false,
+      failure: fail(
+        'no credentials. Set TBA_AUTH_KEY, or FRC_API_USER and FRC_API_TOKEN, or both.\n' +
+          'Both are free and self-serve. With both, the two sources are cross-checked and\n' +
+          'disagreements are reported; with one, nothing is checked against anything.',
+      ),
+    };
   }
 
   const sources: SourceId[] = [];
@@ -123,18 +140,42 @@ export async function fetchEvent(opts: FetchOptions): Promise<LedgerResult> {
     }
   } catch (err) {
     if (err instanceof SourceError) {
-      return fail(`${err.source}: ${err.message}`);
+      return { ok: false, failure: fail(`${err.source}: ${err.message}`) };
     }
-    return fail((err as Error).message);
+    return { ok: false, failure: fail((err as Error).message) };
   }
 
-  const reconciled = reconcileSnapshots({
-    eventKey,
-    tbaTeams: tbaSnap?.teams ?? [],
-    tbaMatches: tbaSnap?.matches ?? [],
-    firstTeams: firstSnap?.teams ?? [],
-    firstMatches: firstSnap?.matches ?? [],
-  });
+  return {
+    ok: true,
+    data: {
+      sources,
+      notes,
+      reconciled: reconcileSnapshots({
+        eventKey,
+        tbaTeams: tbaSnap?.teams ?? [],
+        tbaMatches: tbaSnap?.matches ?? [],
+        firstTeams: firstSnap?.teams ?? [],
+        firstMatches: firstSnap?.matches ?? [],
+      }),
+    },
+  };
+}
+
+/**
+ * Fetch, reconcile, and write a bulk export.
+ *
+ * Reads whichever sources it has credentials for. With only one it still works
+ * and says plainly that nothing was cross-checked — which is honest, and better
+ * than refusing to run for a team that only has a TBA key.
+ */
+export async function fetchEvent(opts: FetchOptions): Promise<LedgerResult> {
+  const { eventKey } = opts;
+  const now = (opts.now ?? Date.now)();
+  const write = opts.writeFile ?? defaultWrite;
+
+  const collected = await collectEvent(opts);
+  if (!collected.ok) return collected.failure;
+  const { sources, notes, reconciled } = collected.data;
 
   const bulk = buildBulkExport({
     eventKey,
@@ -215,22 +256,26 @@ export function observationsFrom(matches: readonly MatchEntry[]): AllianceObserv
  * ones.
  */
 export async function makeVenuePack(opts: PackOptions): Promise<LedgerResult> {
-  const fetched = await fetchEvent({ ...opts, writeFile: () => {} });
-  if (fetched.code !== 0) return fetched;
-
-  const fetchImpl = opts.fetch ?? nodeFetch;
   const now = (opts.now ?? Date.now)();
   const write = opts.writeFile ?? defaultWrite;
 
   if (!opts.credentials.tbaKey) {
     return fail('a venue pack needs TBA_AUTH_KEY for the schedule');
   }
-  const client = new TbaClient(
-    new PoliteClient('tba', { fetch: fetchImpl, credentials: { token: opts.credentials.tbaKey } }),
-  );
-  const snap = await client.eventSnapshot(opts.eventKey);
 
-  const notes: string[] = [];
+  // One fetch, and the pack is built from the RECONCILED view rather than from
+  // one source's word — the cross-check exists precisely to decide the cases
+  // where the two disagree, and a pack built from TBA alone ignores its verdict.
+  const collected = await collectEvent(opts);
+  if (!collected.ok) return collected.failure;
+  const { sources, reconciled } = collected.data;
+  const snap = {
+    teams: reconciled.teams,
+    matches: reconciled.matches,
+    lastOfficialMatch: lastOfficialMatch(reconciled.matches),
+  };
+
+  const notes: string[] = [...collected.data.notes];
   let ratings: readonly RatingEntry[] = opts.ratings ?? [];
 
   if (!opts.ratings?.length && opts.computeRatings) {
@@ -281,7 +326,7 @@ export async function makeVenuePack(opts: PackOptions): Promise<LedgerResult> {
       eventKey: opts.eventKey,
       generatedAt: now,
       officialResultsAsOfMatch: snap.lastOfficialMatch,
-      sources: ['tba'],
+      sources,
       seasonPackId: opts.seasonPackId,
       teams: snap.teams,
       matches: snap.matches,
@@ -294,8 +339,22 @@ export async function makeVenuePack(opts: PackOptions): Promise<LedgerResult> {
   const lines = [
     `Wrote a signed venue pack to ${opts.outFile} (${(bytes.length / 1024).toFixed(1)} kB).`,
     `  ${snap.teams.length} teams, ${snap.matches.length} matches`,
-    `  official results through match ${snap.lastOfficialMatch || '(none yet)'}`,
+    `  sources: ${sources.join(' + ')}`,
+    `  official results through ${snap.lastOfficialMatch ? matchLabel(snap.lastOfficialMatch) : '(none yet)'}`,
   ];
+
+  // The cross-check was computed either way; printing it is the only thing that
+  // ever made it useful, and `pack` used to compute it and throw it away.
+  if (sources.length < 2) {
+    lines.push(
+      '',
+      'Only one source was available, so NOTHING was cross-checked. This pack carries one',
+      "source's word for every score in it.",
+    );
+  } else {
+    const summary = summariseConflicts(reconciled.conflicts);
+    if (summary) lines.push('', summary);
+  }
   if (notes.length) lines.push('', ...notes);
   if (ratings.length === 0 && !opts.computeRatings) {
     lines.push(
