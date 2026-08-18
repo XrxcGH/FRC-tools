@@ -47,6 +47,24 @@ export interface CommandResult {
   readonly stderr?: string;
 }
 
+/**
+ * Persist the store, or explain why not.
+ *
+ * `writeStore` refuses while the last load could not verify every record, since
+ * writing the survivors makes the loss permanent. Every command that writes
+ * goes through here so the refusal reaches the operator as a message with a
+ * non-zero exit rather than a stack trace.
+ */
+function persist(ws: Workspace, store: RecordStore): string | null {
+  try {
+    ws.writeStore(store);
+    return null;
+  } catch (err) {
+    if (err instanceof WorkspaceError) return err.message;
+    throw err;
+  }
+}
+
 const ok = (text: string): CommandResult => ({ text, code: 0 });
 const fail = (text: string): CommandResult => ({ text, code: 1 });
 
@@ -287,7 +305,8 @@ export function ingest(
   for (const env of summary.envelopes) {
     if (store.admit(env, resolver).status === 'admitted') admitted++;
   }
-  ws.writeStore(store);
+  const refused = persist(ws, store);
+  if (refused) return fail(refused);
 
   const lines_ = [
     `Ingested ${scansPath}:`,
@@ -332,6 +351,21 @@ export function ingest(
 export function exportBundle(ws: Workspace, outPath: string): CommandResult {
   const mesh = ws.mesh();
   const store = ws.store();
+
+  // A bundle is what people hand to each other and what they keep as a backup,
+  // so writing an empty one over a good file is the same data loss as
+  // rewriting the store — just aimed at the destination instead. Exporting
+  // nothing while this device cannot read its own records is never intended.
+  const lost = ws.unloadable;
+  if (lost) {
+    return fail(
+      `refusing to export: ${lost.count} record(s) in this store cannot be verified against\n` +
+        `the current registry, so the bundle would contain ${store.size} of them and could\n` +
+        `overwrite a good copy at ${outPath}.\n\n` +
+        `Run "courier verify". The usual cause is a missing or incomplete registry.cbor.`,
+    );
+  }
+
   const bytes = writeBundle(store, { eventKey: mesh.eventKey, producer: mesh.label });
   writeFileSync(outPath, bytes);
   return ok(
@@ -352,7 +386,8 @@ export function importBundle(ws: Workspace, inPath: string): CommandResult {
 
   const meta = readBundle(bytes);
   const result = mergeBundle(store, bytes, ws.registry().resolver(), mesh.eventKey);
-  ws.writeStore(store);
+  const refusedImport = persist(ws, store);
+  if (refusedImport) return fail(refusedImport);
 
   if (result.wrongEvent > 0) {
     return fail(

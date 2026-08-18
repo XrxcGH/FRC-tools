@@ -422,3 +422,127 @@ test('a command missing its arguments explains the shape rather than crashing', 
   await assert.rejects(() => run(['init']), /usage: courier init/);
   await assert.rejects(() => run(['grant', 'only-one']), /usage: courier grant/);
 });
+
+/* ------------------------------------------------- losing the registry --- */
+
+test('a store this device can no longer verify is never quietly rewritten', async () => {
+  // The defect this exists for, reproduced end to end. store() discarded the
+  // MergeResult, so every record whose signing key the registry could not
+  // resolve was dropped with no count and no reason; writeStore() then
+  // serialised the survivors, and both ingest and import call it
+  // unconditionally. A flash-drive copy that missed registry.cbor makes EVERY
+  // record unresolvable at once — including this device's own — and the next
+  // ingest rewrote the store down to nothing, printing "store now holds 0
+  // records" and exiting 0.
+  const s = scratch();
+  try {
+    const wsDir = join(s.dir, 'ws');
+    const ws = new Workspace(wsDir);
+    cmd.init(ws, EVENT, 'pit-laptop');
+
+    const scans = join(s.dir, 'scans.txt');
+    writeFileSync(scans, [tsv('ada', 1, 8793, 3), tsv('bo', 1, 9143, 4), tsv('cy', 2, 8793, 5)].join('\n'));
+    assert.equal(cmd.ingest(ws, scans, PROFILES).code, 0);
+    assert.equal(ws.store().size, 3);
+    const sizeBefore = readFileSync(ws.storePath).length;
+
+    // The registry goes missing. Every record becomes unverifiable at once.
+    rmSync(join(wsDir, 'registry.cbor'));
+    const fresh = new Workspace(wsDir);
+    assert.equal(fresh.store().size, 0, 'the fixture assumes nothing verifies');
+    assert.equal(fresh.unloadable?.count, 3);
+
+    // Ingesting again must NOT overwrite the file with the survivors.
+    const scans2 = join(s.dir, 'scans2.txt');
+    writeFileSync(scans2, tsv('di', 3, 1114, 6));
+    const r = cmd.ingest(new Workspace(wsDir), scans2, PROFILES);
+    assert.equal(r.code, 1, 'ingest destroyed the store and reported success');
+    assert.match(r.text, /refusing to write/);
+    assert.match(r.text, /still in the file/);
+    assert.equal(readFileSync(ws.storePath).length, sizeBefore, 'the store was rewritten anyway');
+
+    // And the records really are recoverable: restore the registry, and they
+    // are all still there.
+    cmd.init(new Workspace(join(s.dir, 'unused')), EVENT, 'x');
+  } finally {
+    s.cleanup();
+  }
+});
+
+test('status says the records are unreadable rather than just counting them', () => {
+  const s = scratch();
+  try {
+    const wsDir = join(s.dir, 'ws');
+    const ws = new Workspace(wsDir);
+    cmd.init(ws, EVENT, 'pit-laptop');
+    const scans = join(s.dir, 'scans.txt');
+    writeFileSync(scans, [tsv('ada', 1, 8793, 3), tsv('bo', 1, 9143, 4)].join('\n'));
+    cmd.ingest(ws, scans, PROFILES);
+
+    const clean = cmd.status(new Workspace(wsDir));
+    assert.match(clean.text, /records     2$/m, 'a healthy store should read plainly');
+
+    rmSync(join(wsDir, 'registry.cbor'));
+    const broken = cmd.status(new Workspace(wsDir));
+    // "records 2" on its own is the reassuring line that let a day disappear.
+    assert.match(broken.text, /records     2 \(0 readable\)/);
+    assert.match(broken.text, /cannot be verified against the current registry/);
+    assert.match(broken.text, /nothing has been lost yet/);
+  } finally {
+    s.cleanup();
+  }
+});
+
+test('a restored registry brings every record back', () => {
+  // The claim the refusal rests on: the records are still in the file, so this
+  // is recoverable as long as nothing rewrites it.
+  const s = scratch();
+  try {
+    const wsDir = join(s.dir, 'ws');
+    const ws = new Workspace(wsDir);
+    cmd.init(ws, EVENT, 'pit-laptop');
+    const scans = join(s.dir, 'scans.txt');
+    writeFileSync(scans, [tsv('ada', 1, 8793, 3), tsv('bo', 1, 9143, 4)].join('\n'));
+    cmd.ingest(ws, scans, PROFILES);
+
+    const registryPath = join(wsDir, 'registry.cbor');
+    const saved = readFileSync(registryPath);
+    rmSync(registryPath);
+    assert.equal(new Workspace(wsDir).store().size, 0);
+
+    writeFileSync(registryPath, saved);
+    const back = new Workspace(wsDir);
+    assert.equal(back.store().size, 2, 'the records did not come back');
+    assert.equal(back.unloadable, null);
+  } finally {
+    s.cleanup();
+  }
+});
+
+test('export refuses rather than overwriting a backup with an empty bundle', () => {
+  // A bundle is what people hand to each other and what they keep as a backup.
+  // Writing an empty one at exit 0 under the text "Copy it anywhere" is the
+  // same data loss as rewriting the store, aimed at the destination instead.
+  const s = scratch();
+  try {
+    const wsDir = join(s.dir, 'ws');
+    const ws = new Workspace(wsDir);
+    cmd.init(ws, EVENT, 'pit-laptop');
+    const scans = join(s.dir, 'scans.txt');
+    writeFileSync(scans, [tsv('ada', 1, 8793, 3), tsv('bo', 1, 9143, 4)].join('\n'));
+    cmd.ingest(ws, scans, PROFILES);
+
+    const backup = join(s.dir, 'good.courier');
+    assert.equal(cmd.exportBundle(new Workspace(wsDir), backup).code, 0);
+    const goodSize = readFileSync(backup).length;
+
+    rmSync(join(wsDir, 'registry.cbor'));
+    const r = cmd.exportBundle(new Workspace(wsDir), backup);
+    assert.equal(r.code, 1);
+    assert.match(r.text, /refusing to export/);
+    assert.match(r.text, /overwrite a good copy/);
+    assert.equal(readFileSync(backup).length, goodSize, 'the backup was overwritten anyway');
+  } finally {
+    s.cleanup();
+  }
+});
