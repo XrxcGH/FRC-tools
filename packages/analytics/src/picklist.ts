@@ -35,6 +35,20 @@ export interface TeamEstimate {
   /** Posterior standard deviation. Not optional — a floor needs it. */
   readonly sigma: number;
   /**
+   * Match-to-match standard deviation: how much this robot ACTUALLY varies.
+   *
+   * Distinct from `sigma`, and the distinction is the whole point of the floor
+   * column. `sigma` is how unsure we are of their AVERAGE, and it shrinks as
+   * you scout more — so a floor built from it says an inconsistent robot gets
+   * steadier the longer you watch it, which is exactly backwards.
+   *
+   * Optional because it is not always recoverable. Fitting contributions from
+   * official alliance totals gives a standard error and nothing about
+   * per-match consistency; those entries come back marked `estimate-only` and
+   * the printed legend says so instead of implying a performance range.
+   */
+  readonly spread?: number;
+  /**
    * Share of this team's contribution that competes for a shared resource.
    *
    * When several robots on one alliance draw from the same supply of game
@@ -164,6 +178,14 @@ export interface PicklistEntry {
    */
   readonly floor: number;
   readonly ceiling: number;
+  /**
+   * What floor/ceiling actually describe.
+   *
+   * 'performance' — the 20th/80th percentile of a single match, which is what
+   * a captain means by "on a bad day". 'estimate-only' — the percentiles of
+   * our estimate of their average, because no per-match spread was supplied.
+   */
+  readonly floorBasis: 'performance' | 'estimate-only';
 }
 
 const DEFAULT_SIMULATIONS = 4000;
@@ -195,10 +217,14 @@ export function rankPicklist(opts: PicklistOptions): PicklistEntry[] {
   const noise = opts.rivalNoise ?? DEFAULT_RIVAL_NOISE;
 
   const value = new Map<number, number>();
+  /** Draws of the team's true MEAN. Ranking uses these. */
   const samples = new Map<number, number[]>();
+  /** Draws of a single MATCH. floor and ceiling use these. */
+  const perMatch = new Map<number, number[]>();
   for (const c of board) {
     value.set(c.team, 0);
     samples.set(c.team, []);
+    perMatch.set(c.team, []);
   }
 
   for (let s = 0; s < sims; s++) {
@@ -208,6 +234,12 @@ export function rankPicklist(opts: PicklistOptions): PicklistEntry[] {
       const v = c.mean + c.sigma * gaussian(rng);
       drawn.set(c.team, { ...c, mean: v });
       samples.get(c.team)!.push(v);
+      // A single match is the true mean plus that robot's own variation, so
+      // the predictive spread is sqrt(sigma^2 + spread^2). Drawing a fresh
+      // deviate rather than reusing the one above keeps the two independent,
+      // which they are.
+      const spread = c.spread ?? 0;
+      perMatch.get(c.team)!.push(v + (spread > 0 ? spread * gaussian(rng) : 0));
     }
 
     // Rivals pick by public rating plus noise. Their ordering is a model, not
@@ -245,13 +277,14 @@ export function rankPicklist(opts: PicklistOptions): PicklistEntry[] {
 
   return board
     .map((c) => {
-      const xs = samples.get(c.team)!.slice().sort((a, b) => a - b);
+      const xs = perMatch.get(c.team)!.slice().sort((a, b) => a - b);
       return {
         team: c.team,
         expectedValue: value.get(c.team)! / sims,
         availabilityRisk: riskOfLoss(c, board, opts, rng, sims),
         floor: percentile(xs, 0.2),
         ceiling: percentile(xs, 0.8),
+        floorBasis: (c.spread ?? 0) > 0 ? ('performance' as const) : ('estimate-only' as const),
       };
     })
     .sort((a, b) => {
@@ -357,8 +390,23 @@ export function formatPicklist(ranked: readonly PicklistEntry[], limit = 20): st
   });
   lines.push('');
   lines.push('alliance total = your alliance WITH this pick. Rank on this column.');
-  lines.push('floor = 20th percentile of their contribution; what you get on a bad day.');
-  lines.push('ceiling = 80th percentile. Floor and ceiling are THIS TEAM alone, not the total.');
+  if (rows.some((r) => r.floorBasis === 'estimate-only')) {
+    // Saying "what you get on a bad day" here would be a lie: without a
+    // per-match spread these are the percentiles of our estimate of the
+    // AVERAGE, and they narrow as data accumulates no matter how erratic the
+    // robot is.
+    lines.push(
+      'floor/ceiling = 20th and 80th percentile of our estimate of their AVERAGE — not of a',
+      'single match. Nothing here supplied match-to-match spread, so this does not tell you',
+      'what a bad day looks like. It narrows as data accumulates even for an erratic robot.',
+    );
+  } else {
+    lines.push(
+      'floor = 20th percentile of a SINGLE MATCH; what you get on a bad day.',
+      'ceiling = 80th percentile. Both are THIS TEAM alone, not the alliance total, and both',
+      'include the robot\'s own match-to-match variation, not just our uncertainty about it.',
+    );
+  }
   lines.push('risk = chance this team is gone before your next pick.');
   return lines.join('\n');
 }

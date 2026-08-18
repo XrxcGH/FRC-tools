@@ -122,7 +122,7 @@ export function picklist(ws: Workspace, args: PicklistArgs): CommandResult {
   for (const t of args.alliance) {
     const e = byTeam.get(t);
     if (!e) unscouted.push(t);
-    else alliance.push({ team: t, mean: e.mean, sigma: e.sigma });
+    else alliance.push({ team: t, mean: e.mean, sigma: e.sigma, spread: e.spread });
   }
   if (unscouted.length > 0) {
     return fail(
@@ -135,7 +135,7 @@ export function picklist(ws: Workspace, args: PicklistArgs): CommandResult {
   const onAlliance = new Set(args.alliance);
   const candidates: TeamEstimate[] = estimates
     .filter((e) => !onAlliance.has(e.team))
-    .map((e) => ({ team: e.team, mean: e.mean, sigma: e.sigma }));
+    .map((e) => ({ team: e.team, mean: e.mean, sigma: e.sigma, spread: e.spread }));
 
   if (candidates.length === 0) {
     return fail('every scouted team is already on your alliance; there is nobody left to pick.');

@@ -441,11 +441,15 @@ const { estimates, thin } = teamEstimatesFrom(decoded.records, 'teleop');
 const ours = estimates.find((e) => e.team === 8793)!;
 const board = estimates
   .filter((e) => e.team !== 8793)
-  .map((e) => ({ team: e.team, mean: e.mean, sigma: e.sigma }));
+  // `spread` is the robot's own match-to-match variation, carried separately
+  // from `sigma`, which is only how unsure we are of its average. The floor
+  // column needs the first; built from the second it claims an erratic robot
+  // gets steadier the more you scout it.
+  .map((e) => ({ team: e.team, mean: e.mean, sigma: e.sigma, spread: e.spread }));
 
 const ranked = rankPicklist({
   candidates: board,
-  alliance: [{ team: ours.team, mean: ours.mean, sigma: ours.sigma }],
+  alliance: [{ team: ours.team, mean: ours.mean, sigma: ours.sigma, spread: ours.spread }],
   picksBeforeYourNext: 5,
   haveSecondPick: true,
   rng: seededRng(1),

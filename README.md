@@ -46,6 +46,8 @@ Pairing is two devices, three files, and one spoken six-digit code: `join-reques
 node packages/courier-cli/src/main.ts picklist --schema my-schema.json --field teleop --alliance 8793 --picks-between 5
 ```
 
+The `floor` column is the 20th percentile of a **single match**, not of our estimate of a team's average — those are different numbers and only the first answers "what do they do on a bad day". Where no match-to-match spread exists (the Ledger fits contributions from official *alliance* totals, which cannot recover a team's consistency) the legend says so instead of inventing a range.
+
 No least squares here, deliberately. OPR and its relatives exist because the *official* record is alliance-level and the parts have to be solved for; scouting data is already per-robot, so a mean is both more accurate and far easier for a student to defend in a meeting. A team seen fewer than three times is named and omitted rather than ranked, and the two column groups are labelled apart because `alliance total` and `floor` are on different scales.
 
 The second CLI pulls public data and writes files. It never holds a signing key, so the machine running a nightly fetch is not the machine that signs scouting records:
@@ -94,7 +96,7 @@ It ends by checking seven claims about what just happened and **exits non-zero i
 
 [![CI](https://github.com/XrxcGH/FRC-tools/actions/workflows/ci.yml/badge.svg)](https://github.com/XrxcGH/FRC-tools/actions/workflows/ci.yml)
 
-**Status: 480 tests passing**, on Node 22, 24 and current LTS.
+**Status: 484 tests passing**, on Node 22, 24 and current LTS.
 
 *Implemented* — the record format and canonical codec; envelope sealing and verification; the record store; range-digest set reconciliation with chunked transfer; QR ingest with profile detection; the pairing ceremony and key registry; the Season Pack format, versioning rules, scoring engine and validator; sneakernet bundles; a rate-limited, conditional-request HTTP client for the three upstream data sources; and signed venue packs with explicit staleness.
 
