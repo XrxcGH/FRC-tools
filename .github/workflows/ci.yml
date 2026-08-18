@@ -81,13 +81,18 @@ jobs:
           node --experimental-strip-types packages/courier-cli/src/main.ts init 2027mose pit-laptop --dir "$W/laptop"
           node --experimental-strip-types packages/courier-cli/src/main.ts init 2027mose stands-tablet --dir "$W/tablet"
           node --experimental-strip-types packages/courier-cli/src/main.ts join-request "$W/req.bin" --dir "$W/tablet"
-          node --experimental-strip-types packages/courier-cli/src/main.ts grant "$W/req.bin" "$W/grant.bin" --dir "$W/laptop"
+          # Grant ONCE and keep its output: a second grant re-stages with a fresh
+          # code, and the confirm would then compare against the wrong one.
+          # Read the digits off the "Confirmation code:" line specifically —
+          # a bare six-digit grep also matches runs inside the hex key id.
+          node --experimental-strip-types packages/courier-cli/src/main.ts grant "$W/req.bin" "$W/grant.bin" --dir "$W/laptop" | tee "$W/grant.out"
+          CODE=$(grep 'Confirmation code:' "$W/grant.out" | tr -dc '0-9')
+          case "$CODE" in [0-9][0-9][0-9][0-9][0-9][0-9]) ;; *) echo "::error::confirmation code was '$CODE', not six digits"; exit 1;; esac
           node --experimental-strip-types packages/courier-cli/src/main.ts accept "$W/grant.bin" "$W/req.bin" --dir "$W/tablet"
 
           # The ceremony is not finished until the codes are compared: `confirm`
           # is what admits the joiner. Skipping it leaves the laptop trusting
           # nobody, and every later step would pass while moving zero records.
-          CODE=$(node --experimental-strip-types packages/courier-cli/src/main.ts grant "$W/req.bin" "$W/grant.bin" --dir "$W/laptop" | grep -oE '[0-9]{6}' | head -1)
           node --experimental-strip-types packages/courier-cli/src/main.ts confirm "$CODE" "$CODE" --dir "$W/laptop"
           printf 'ada\t1\t8793\t3\nbo\t1\t8793\t4\n' > "$W/scans.txt"
           node --experimental-strip-types packages/courier-cli/src/main.ts ingest "$W/scans.txt" --dir "$W/tablet"
