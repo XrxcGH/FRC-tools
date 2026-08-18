@@ -24,3 +24,4 @@ export { run } from './main.ts';
 
 export { picklist, type PicklistArgs } from './picklist.ts';
 export { scouts, type ScoutsArgs } from './scouts.ts';
+export { extract, type ExtractArgs, type ExtractFormat } from './extract.ts';

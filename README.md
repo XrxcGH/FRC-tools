@@ -64,6 +64,14 @@ node packages/courier-cli/src/main.ts scouts --schema my-schema.json --field tel
 
 With no official score to check against, the reference is the other people watching the same robot. Those residuals cannot be read one row at a time: with two scouts on a robot they are exact negatives, so one person drifting low is an equal and opposite "drift" in whoever sat next to them. An additive effect is fitted per scout across all their pairings and the peers' effects removed before anyone is judged. The CUSUM constants are measured, not inherited — `packages/analytics/bench/cusum-operating-point.ts` prints the table, and the textbook 0.5/4 pairing turned out to accuse an innocent scout at four events out of five on a six-scout team.
 
+`extract` is the one that keeps this from being a roach motel. Courier's job is to *move* the data; what a team does with it afterwards is their business, and their spreadsheet needs CSV, not a formatted picklist:
+
+```bash
+node packages/courier-cli/src/main.ts extract --schema my-schema.json --out day.csv
+```
+
+Every record produces exactly one row, decoded or not — an unreadable one carries `decoded=false` and empty values rather than vanishing, because a CSV quietly shorter than the store is the failure nobody notices. Values that a spreadsheet would execute as a formula are defanged: a record body is text from whatever app printed the QR code, and the file lands in a spreadsheet a student opens without thinking.
+
 The demo walks the flagship journey end to end: eight scouts capture 80 qualification matches through a scouting app that knows nothing about Courier, the Bridge ingests its QR output, the records gossip across the stands with no venue network until a single phone finally walks to the pit — seven of the eight never meet the laptop at all — the team decodes its own bodies, builds a picklist, catches the one scout who stopped watching at match 41, and a rival's forged records bounce off. Everything but the radio is the real code path: real Ed25519 signatures, real canonical CBOR, real range-digest reconciliation over encoded wire messages.
 
 It ends by checking seven claims about what just happened and **exits non-zero if any of them failed**. Nothing in it depends on timing, the network, or an unseeded random source, so a failure there is a defect rather than a flaky run — and since the demo is the only thing that exercises every layer against every other one, that is where several of this project's real bugs surfaced.
@@ -86,7 +94,7 @@ It ends by checking seven claims about what just happened and **exits non-zero i
 
 [![CI](https://github.com/XrxcGH/FRC-tools/actions/workflows/ci.yml/badge.svg)](https://github.com/XrxcGH/FRC-tools/actions/workflows/ci.yml)
 
-**Status: 458 tests passing**, on Node 22, 24 and current LTS.
+**Status: 472 tests passing**, on Node 22, 24 and current LTS.
 
 *Implemented* — the record format and canonical codec; envelope sealing and verification; the record store; range-digest set reconciliation with chunked transfer; QR ingest with profile detection; the pairing ceremony and key registry; the Season Pack format, versioning rules, scoring engine and validator; sneakernet bundles; a rate-limited, conditional-request HTTP client for the three upstream data sources; and signed venue packs with explicit staleness.
 

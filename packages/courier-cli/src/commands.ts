@@ -36,6 +36,15 @@ export interface CommandResult {
   readonly text: string;
   /** Non-zero when the operator needs to act. */
   readonly code: number;
+  /**
+   * Notes that must NOT land in `text`.
+   *
+   * A command whose output is meant to be piped — `courier extract` writing CSV
+   * to stdout — still has things the operator needs to read. Mixing them into
+   * the data corrupts the file; dropping them hides that records were skipped.
+   * They go to stderr.
+   */
+  readonly stderr?: string;
 }
 
 const ok = (text: string): CommandResult => ({ text, code: 0 });
