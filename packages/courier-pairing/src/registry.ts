@@ -91,6 +91,26 @@ export class KeyRegistry {
       // an attack or a corrupt registry, not something to resolve silently.
       throw new RegistryError(`key id collision for ${hex}`);
     }
+
+    // Revocation is STICKY. `add` used to end in an unconditional set, and a
+    // key arriving in a pairing grant roster carries no `revokedAt` — grantJoin
+    // serialises only publicKey, backing, label and addedAt — so re-learning a
+    // key you had revoked silently un-revoked it. Every later pairing round
+    // trip was an opportunity for a device you had thrown out to walk back in,
+    // and nothing said so.
+    //
+    // A kid is a hash of the public key, so the same kid IS the same key: there
+    // is no legitimate reading of "add" that means "forgive". Un-revoking is a
+    // deliberate local act and needs its own call, not a side effect of sync.
+    if (existing?.revokedAt !== undefined && key.revokedAt === undefined) {
+      this.#byKid.set(hex, {
+        ...key,
+        revokedAt: existing.revokedAt,
+        ...(existing.revokedReason === undefined ? {} : { revokedReason: existing.revokedReason }),
+      });
+      return;
+    }
+
     this.#byKid.set(hex, key);
   }
 
