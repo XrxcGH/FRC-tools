@@ -8,7 +8,7 @@
  * maintenance burden that killed every predecessor to this project.
  */
 
-import { MemoryLink, type Link } from '@courier/transport';
+import { MemoryLink, LinkClosedError, LinkStalledError, type Link } from '@courier/transport';
 import {
   Reassembler,
   split,
@@ -151,7 +151,14 @@ export class GattLink implements Link {
   }
 
   async send(bytes: Uint8Array): Promise<void> {
-    if (this.#closed) throw new Error(`link ${this.label} is closed`);
+    // These are LinkClosedError / LinkStalledError, not bare Errors, and the
+    // class is what syncOverLink reads. A bare Error falls through its
+    // LinkClosedError check into the outer catch and is reported as
+    // 'protocol-error' — documented there as "either corruption or a hostile
+    // peer" — for the ordinary case of somebody walking out of range. The
+    // MemoryLink threw the right class all along, which is why the transport
+    // tests agreed and only the BLE path lied.
+    if (this.#closed) throw new LinkClosedError(this.label);
 
     const frameId = this.#frameId;
     this.#frameId = (this.#frameId + 1) & 0xffff;
@@ -162,13 +169,8 @@ export class GattLink implements Link {
       while (!this.#transport.write(packet)) {
         this.stats.backpressureStalls++;
         const drained = await this.#awaitReady();
-        if (!drained) {
-          throw new Error(
-            `link ${this.label} stalled for ${this.#readyTimeout} ms waiting for the BLE ` +
-              `stack to drain. The peer is probably gone.`,
-          );
-        }
-        if (this.#closed) throw new Error(`link ${this.label} closed mid-frame`);
+        if (!drained) throw new LinkStalledError(this.label, this.#readyTimeout);
+        if (this.#closed) throw new LinkClosedError(this.label);
       }
       this.stats.packetsSent++;
     }

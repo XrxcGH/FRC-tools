@@ -21,7 +21,7 @@ import {
   type KeyResolver,
   type SyncMessage,
 } from '@courier/core';
-import { LinkClosedError, type Link } from './link.ts';
+import { LinkClosedError, LinkStalledError, type Link } from './link.ts';
 
 export type SyncRole = 'initiator' | 'responder';
 
@@ -125,6 +125,7 @@ export async function syncOverLink(
   const receiveTimeout = opts.receiveTimeoutMs ?? DEFAULT_RECEIVE_TIMEOUT;
 
   const session = new AntiEntropySession(store, resolveKey);
+  let stalled: string | null = null;
   let rounds = 0;
   let bytesSent = 0;
   let bytesReceived = 0;
@@ -146,6 +147,12 @@ export async function syncOverLink(
       await link.send(wire);
     } catch (err) {
       if (err instanceof LinkClosedError) return false;
+      // A stall is the send-side twin of the receive-side silence guard: the
+      // peer stopped draining and probably walked away. Ordinary, not hostile.
+      if (err instanceof LinkStalledError) {
+        stalled = err.message;
+        return false;
+      }
       throw err;
     }
     bytesSent += wire.length;
@@ -156,7 +163,9 @@ export async function syncOverLink(
 
   try {
     if (role === 'initiator') {
-      if (!(await send(session.start()))) return finish('peer-hung-up');
+      if (!(await send(session.start()))) {
+        return stalled ? finish('peer-silent', stalled) : finish('peer-hung-up');
+      }
     }
 
     while (rounds < maxRounds) {

@@ -53,6 +53,22 @@ export class LinkClosedError extends LinkError {
   }
 }
 
+/**
+ * The send side gave up waiting for the stack to drain.
+ *
+ * Distinct from `LinkClosedError` for the same reason `peer-silent` is distinct
+ * from `peer-hung-up`: a close is the peer saying it is done, a stall is a peer
+ * that may not know it is gone. Both are ordinary on an event floor and neither
+ * is a protocol error — throwing a bare `Error` for this made a device walking
+ * out of range come back as "either corruption or a hostile peer".
+ */
+export class LinkStalledError extends LinkError {
+  constructor(label: string, ms: number) {
+    super(`link ${label} stalled for ${ms} ms waiting for the stack to drain`);
+    this.name = 'LinkStalledError';
+  }
+}
+
 /* -------------------------------------------------------------------------- */
 /* In-memory link pair                                                         */
 /* -------------------------------------------------------------------------- */
