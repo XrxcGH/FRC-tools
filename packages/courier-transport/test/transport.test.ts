@@ -4,6 +4,7 @@ import {
   MemoryLink,
   syncOverLink,
   syncBothEnds,
+  DEFAULT_RECEIVE_TIMEOUT,
   writeBundle,
   readBundle,
   peekBundle,
@@ -343,4 +344,84 @@ test('bundles compose with links: sneakernet in, radio out', async () => {
 
   assert.ok(storesConverged(laptop, phone2));
   assert.equal(laptop.size, 150);
+});
+
+/* ------------------------------------------------------ a peer goes quiet -- */
+
+test('a peer that goes silent ends the session instead of hanging it', async () => {
+  // Not the same as a hang-up. maxRounds stops a peer that spins and maxBytes
+  // stops one that floods; neither stops somebody walking out of range while
+  // the radio has not noticed yet. A BLE supervision timeout can take tens of
+  // seconds, and until it fires nothing resolves receive().
+  const store = new RecordStore();
+  fill(store, { from: 1, to: 5 });
+
+  // b is never driven and never closed — the far side simply stops existing.
+  const [a, b] = MemoryLink.pair();
+  void b;
+
+  const started = Date.now();
+  const out = await syncOverLink(store, resolver, a, 'initiator', { receiveTimeoutMs: 60 });
+
+  assert.equal(out.ending, 'peer-silent');
+  assert.match(out.error!, /no frame for 60 ms/);
+  assert.ok(Date.now() - started < 5_000, 'waited far longer than it was told to');
+});
+
+test('a silent peer leaves the store intact and re-syncable', async () => {
+  // The store is grow-only, so abandoning a session costs nothing: whatever
+  // arrived is kept and the next round reconciles only what is still missing.
+  const a = new RecordStore();
+  const b = new RecordStore();
+  fill(a, { from: 1, to: 30 });
+  const before = a.size;
+
+  const [dead] = MemoryLink.pair();
+  const abandoned = await syncOverLink(a, resolver, dead, 'initiator', { receiveTimeoutMs: 60 });
+  assert.equal(abandoned.ending, 'peer-silent');
+  assert.equal(a.size, before, 'the abandoned session damaged the store');
+
+  const [la, lb] = MemoryLink.pair();
+  await Promise.all([
+    syncOverLink(a, resolver, la, 'initiator'),
+    syncOverLink(b, resolver, lb, 'responder'),
+  ]);
+  assert.ok(storesConverged(a, b), 'the retry did not converge');
+});
+
+test('the silence guard does not fire on a working sync', async () => {
+  const a = new RecordStore();
+  const b = new RecordStore();
+  fill(a, { from: 1, to: 120 });
+
+  const [la, lb] = MemoryLink.pair();
+  const [outA, outB] = await Promise.all([
+    syncOverLink(a, resolver, la, 'initiator', { receiveTimeoutMs: 5_000 }),
+    syncOverLink(b, resolver, lb, 'responder', { receiveTimeoutMs: 5_000 }),
+  ]);
+  assert.notEqual(outA.ending, 'peer-silent');
+  assert.notEqual(outB.ending, 'peer-silent');
+  assert.ok(storesConverged(a, b));
+});
+
+test('the guard can be switched off, for a caller that drives both sides', async () => {
+  const a = new RecordStore();
+  const b = new RecordStore();
+  fill(a, { from: 1, to: 10 });
+  const [la, lb] = MemoryLink.pair();
+  const [outA] = await Promise.all([
+    syncOverLink(a, resolver, la, 'initiator', { receiveTimeoutMs: 0 }),
+    syncOverLink(b, resolver, lb, 'responder', { receiveTimeoutMs: 0 }),
+  ]);
+  // Whichever side finishes first closes, so the other reports 'peer-hung-up'.
+  // The point of the test is that no timer fired.
+  assert.notEqual(outA.ending, 'peer-silent');
+  assert.ok(storesConverged(a, b));
+});
+
+test('the default timeout sits between one worst-case frame and the gossip period', () => {
+  // Both bounds are derived in the constant's own comment. This keeps a later
+  // edit from drifting outside them without anyone noticing.
+  assert.ok(DEFAULT_RECEIVE_TIMEOUT > 5_000, 'must outlast the slowest single frame');
+  assert.ok(DEFAULT_RECEIVE_TIMEOUT < 20_000, 'must not outlast a gossip round (D-11)');
 });
