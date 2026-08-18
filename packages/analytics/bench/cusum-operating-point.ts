@@ -131,6 +131,6 @@ console.log(
   '\nThe shipped pairing is chosen from the last table. An alarm has to be believable:\n' +
     'a detector that accuses somebody at a third of events gets ignored, and then the\n' +
     'real drift goes unnoticed too. The cost is missing about a fifth of MILD (1σ)\n' +
-    'drifts; anything worse than that is caught essentially every time, within two or\n' +
-    'three matches of a scout\'s own pairings.',
+    'drifts; anything worse than that is caught essentially every time, within three\n' +
+    'to five of a scout\'s own pairings — the medians in the table above, not fewer.',
 );

@@ -139,10 +139,15 @@ export class Reassembler {
     }
 
     if (seq !== this.#expectedSeq) {
+      // Read it BEFORE the reset, which zeroes it. The template literal is
+      // evaluated after, so this used to report "expected sequence 0" no matter
+      // how far into the frame the gap was — plausible enough to be misleading
+      // rather than obviously broken.
+      const expected = this.#expectedSeq;
       this.stats.framesAbandoned++;
       this.#reset();
       throw new FramingError(
-        `out-of-order packet: expected sequence ${this.#expectedSeq}, got ${seq}. ` +
+        `out-of-order packet: expected sequence ${expected}, got ${seq}. ` +
           `The partial frame was discarded rather than spliced.`,
       );
     }

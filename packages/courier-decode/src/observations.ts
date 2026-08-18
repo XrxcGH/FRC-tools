@@ -21,7 +21,18 @@ export interface ScoutObservationLike {
 }
 
 /**
- * Per-robot scout observations for one alliance in one match.
+ * Per-robot scout observations for one alliance.
+ *
+ * THE CALLER MUST PRE-FILTER TO ONE MATCH. There is no match parameter and this
+ * does not filter by match or event — it emits one observation for every record
+ * whose team is on the roster, from anywhere in the store. The only thing a
+ * caller has to hand is `DecodeReport.records`, the whole decoded store, so the
+ * burden is real and used to be undocumented: the header said "in one match"
+ * and nothing enforced it.
+ *
+ * It matters because the output feeds `blendWithOfficial`, whose official-total
+ * step is a HARD CONSTRAINT on a single match's alliance sum. Feeding it two
+ * matches' worth of observations forces the wrong total onto the wrong robots.
  *
  * `alliance` fixes the robot ordering, so index 0 is always the same team for
  * every scout who watched that match. Getting this wrong would attribute one

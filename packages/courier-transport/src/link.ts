@@ -169,9 +169,15 @@ export class MemoryLink implements Link {
     this.#waiters = [];
     const peer = this.#peer;
     if (peer && !peer.#closed) {
-      // Signal the peer that nothing more is coming, without closing its own
-      // send side — a half-open link is what a device walking out of range
-      // actually looks like.
+      // Close BOTH directions. The comment here used to claim this left the peer
+      // half-open, which it never did: `peer.#closed = true` also fails the peer's
+      // next send(). That mattered because MemoryLink is described as the
+      // reference a real transport is compared against, so the comment was the
+      // specification a transport author would have coded to.
+      //
+      // Symmetric is also the honest model for BLE: a GATT disconnect ends the
+      // connection in both directions. A genuinely half-open link is a TCP idea
+      // that has no analogue here.
       for (const w of peer.#waiters) w.resolve(null);
       peer.#waiters = [];
       peer.#closed = true;
