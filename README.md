@@ -86,7 +86,7 @@ It ends by checking seven claims about what just happened and **exits non-zero i
 
 [![CI](https://github.com/XrxcGH/FRC-tools/actions/workflows/ci.yml/badge.svg)](https://github.com/XrxcGH/FRC-tools/actions/workflows/ci.yml)
 
-**Status: 453 tests passing**, on Node 22, 24 and current LTS.
+**Status: 458 tests passing**, on Node 22, 24 and current LTS.
 
 *Implemented* — the record format and canonical codec; envelope sealing and verification; the record store; range-digest set reconciliation with chunked transfer; QR ingest with profile detection; the pairing ceremony and key registry; the Season Pack format, versioning rules, scoring engine and validator; sneakernet bundles; a rate-limited, conditional-request HTTP client for the three upstream data sources; and signed venue packs with explicit staleness.
 

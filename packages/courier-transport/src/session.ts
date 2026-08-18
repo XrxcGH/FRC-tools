@@ -25,7 +25,12 @@ import { LinkClosedError, type Link } from './link.ts';
 
 export type SyncRole = 'initiator' | 'responder';
 
-export type SyncEnding = 'complete' | 'peer-hung-up' | 'round-limit' | 'protocol-error';
+export type SyncEnding =
+  | 'complete'
+  | 'peer-hung-up'
+  | 'peer-silent'
+  | 'round-limit'
+  | 'protocol-error';
 
 export interface SyncOutcome {
   readonly ending: SyncEnding;
@@ -44,11 +49,69 @@ export interface SyncOptions {
   readonly maxRounds?: number;
   /** Abort a session that exceeds this many bytes received. */
   readonly maxBytes?: number;
+  /**
+   * Give up when a peer goes quiet for this long. See DEFAULT_RECEIVE_TIMEOUT.
+   *
+   * Pass 0 to wait forever, which is only ever right in a test that drives both
+   * sides itself and can guarantee somebody eventually speaks.
+   */
+  readonly receiveTimeoutMs?: number;
   readonly onProgress?: (rounds: number, admitted: number) => void;
 }
 
 const DEFAULT_MAX_ROUNDS = 24;
 const DEFAULT_MAX_BYTES = 32 * 1024 * 1024;
+
+/**
+ * How long to wait for a peer that has stopped speaking. Derived, not picked.
+ *
+ * maxRounds and maxBytes stop a peer that spins or floods. Neither stops the
+ * commoner failure: somebody walks out of range mid-sync and the radio has not
+ * noticed yet. A BLE supervision timeout can take tens of seconds, and until it
+ * fires nothing resolves `receive()` — so the sync sits there, and with it the
+ * gossip schedule that was meant to try somebody else.
+ *
+ * The floor is one worst-case frame. MAX_RECORDS_PER_MESSAGE is 32, records
+ * measure 186-1215 bytes on the wire (MEASUREMENTS.md §1) so a full frame is
+ * ~6-39 kB, and at the design's assumed 12 kB/s for the slowest BLE path that
+ * is 0.5-3.3 s, plus the peer's own verify time — MEASUREMENTS.md §4 puts 32
+ * records at ~55 ms. Call the realistic worst case 5 s.
+ *
+ * The ceiling is the gossip schedule: D-11 sets anti-entropy at 20 s, and a
+ * session that has been silent for longer than that is holding up a round it
+ * should have yielded. 15 s sits between the two with room on both sides, and
+ * matches the BLE link's own ready timeout, which answers the same question one
+ * layer down.
+ *
+ * Ending the session is cheap and correct: the store is grow-only, so whatever
+ * arrived is kept, and the next round re-reconciles only the remaining
+ * difference. There is nothing to roll back.
+ */
+export const DEFAULT_RECEIVE_TIMEOUT = 15_000;
+
+/**
+ * Receive, or give up after `ms`.
+ *
+ * The timer is deliberately not unref'd — see the note in GattLink#awaitReady.
+ * A guard that switches itself off when it is the only thing left in the event
+ * loop is not a guard, and that is exactly the stalled-peer case.
+ */
+async function receiveWithin(link: Link, ms: number): Promise<Uint8Array | null | 'timeout'> {
+  if (ms <= 0) return link.receive();
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      link.receive(),
+      new Promise<'timeout'>((resolve) => {
+        timer = setTimeout(() => resolve('timeout'), ms);
+      }),
+    ]);
+  } finally {
+    // Always, including when receive() won the race, or the process holds the
+    // loop open for the full timeout after every single frame.
+    if (timer !== undefined) clearTimeout(timer);
+  }
+}
 
 export async function syncOverLink(
   store: RecordStore,
@@ -59,6 +122,7 @@ export async function syncOverLink(
 ): Promise<SyncOutcome> {
   const maxRounds = opts.maxRounds ?? DEFAULT_MAX_ROUNDS;
   const maxBytes = opts.maxBytes ?? DEFAULT_MAX_BYTES;
+  const receiveTimeout = opts.receiveTimeoutMs ?? DEFAULT_RECEIVE_TIMEOUT;
 
   const session = new AntiEntropySession(store, resolveKey);
   let rounds = 0;
@@ -96,7 +160,16 @@ export async function syncOverLink(
     }
 
     while (rounds < maxRounds) {
-      const wire = await link.receive();
+      const received = await receiveWithin(link, receiveTimeout);
+      if (received === 'timeout') {
+        // Distinct from 'peer-hung-up' on purpose. A hang-up is a peer saying
+        // it is done; silence is a peer that may not know it is gone. The
+        // caller wants to retry the second one sooner, and a diagnostics screen
+        // wants to show them differently.
+        await link.close();
+        return finish('peer-silent', `no frame for ${receiveTimeout} ms`);
+      }
+      const wire = received;
       if (wire === null) {
         // A clean end and a dropped link are indistinguishable from here, and
         // deliberately so — both mean "no more records are coming right now",

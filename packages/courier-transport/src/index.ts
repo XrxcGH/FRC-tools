@@ -17,6 +17,7 @@ export {
 
 export {
   syncOverLink,
+  DEFAULT_RECEIVE_TIMEOUT,
   syncBothEnds,
   type SyncRole,
   type SyncEnding,
