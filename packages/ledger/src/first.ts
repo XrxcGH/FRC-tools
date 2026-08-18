@@ -17,7 +17,7 @@
  * system never sees a FIRST-shaped identifier.
  */
 
-import { packMatch, type CompLevel } from '@courier/core';
+import { packMatch, matchLabel, type CompLevel } from '@courier/core';
 import { PoliteClient } from './http.ts';
 import type { MatchEntry, TeamEntry } from './venue-pack.ts';
 
@@ -62,13 +62,30 @@ export interface FirstMatch {
   readonly postResultTime?: string | null;
 }
 
+/**
+ * FIRST's tournament levels do not map cleanly onto TBA's; be explicit.
+ *
+ * `practice` is deliberately absent, and it used to map to `qm`. That made
+ * Practice 1 pack to the same match id as Qualification 1, so a practice score
+ * overwrote the real qualification total, the export carried it as the official
+ * result, and the reconciler blamed TBA for a roster mismatch it had invented.
+ * Practice matches numbered past the qual schedule were worse than an
+ * overwrite: they became qualification matches that never happened.
+ *
+ * Practice results are not part of the official record and carry no ranking
+ * weight, so dropping them is correct — the packing scheme has no level for
+ * them because TBA has no level for them.
+ */
 const LEVELS: Readonly<Record<string, CompLevel>> = {
   qualification: 'qm',
   playoff: 'sf',
-  practice: 'qm',
 };
 
-/** FIRST's tournament levels do not map cleanly onto TBA's; be explicit. */
+/** Levels recognised and deliberately not imported, so they are not "unmapped". */
+const DELIBERATELY_DROPPED: Readonly<Record<string, string>> = {
+  practice: 'practice results are not part of the official record',
+};
+
 export function compLevelFor(tournamentLevel: string | undefined): CompLevel | null {
   if (!tournamentLevel) return null;
   return LEVELS[tournamentLevel.toLowerCase()] ?? null;
@@ -93,8 +110,19 @@ export function normaliseFirstMatches(raw: readonly FirstMatch[]): {
   for (const m of raw) {
     const label = m.description ?? `match ${m.matchNumber ?? '?'}`;
     const level = compLevelFor(m.tournamentLevel);
-    if (!level || typeof m.matchNumber !== 'number') {
-      skipped.push(`${label}: unmapped tournament level "${m.tournamentLevel ?? ''}"`);
+    if (!level) {
+      // A level we chose not to import reads differently from one nobody has
+      // mapped yet: the first is a decision, the second is a gap to go fix.
+      const why = DELIBERATELY_DROPPED[(m.tournamentLevel ?? '').toLowerCase()];
+      skipped.push(
+        why
+          ? `${label}: skipped — ${why}`
+          : `${label}: unmapped tournament level "${m.tournamentLevel ?? ''}"`,
+      );
+      continue;
+    }
+    if (typeof m.matchNumber !== 'number') {
+      skipped.push(`${label}: no match number`);
       continue;
     }
 
@@ -128,8 +156,35 @@ export function normaliseFirstMatches(raw: readonly FirstMatch[]): {
     }
   }
 
-  matches.sort((a, b) => a.match - b.match);
-  return { matches, skipped };
+  // Two rows packing to one id means the level mapping is wrong — that is how
+  // a practice match came to overwrite a qualification result. Downstream the
+  // collision would be resolved by a Map's last-wins and vanish without a
+  // trace, so catch it here where the cause is visible.
+  const byId = new Map<number, MatchEntry[]>();
+  for (const m of matches) {
+    const list = byId.get(m.match);
+    if (list) list.push(m);
+    else byId.set(m.match, [m]);
+  }
+
+  const unique: MatchEntry[] = [];
+  for (const [id, rows] of byId) {
+    if (rows.length === 1) {
+      unique.push(rows[0]!);
+      continue;
+    }
+    // Drop them ALL. Keeping either one puts one match's score on another
+    // match's roster, and which one survives would depend on payload order.
+    skipped.push(
+      `${matchLabel(id)}: ${rows.length} source rows pack to the same match id ` +
+        rows.map((r) => `(${r.red.join('/')} vs ${r.blue.join('/')})`).join(' and ') +
+        `. None were imported — a collision here means a tournament level is mapped wrong, ` +
+        `and picking a winner would put one match's score on another match's roster.`,
+    );
+  }
+
+  unique.sort((a, b) => a.match - b.match);
+  return { matches: unique, skipped };
 }
 
 /* -------------------------------------------------------------------------- */
